@@ -1,14 +1,76 @@
+figure
+
+subplot(2,1,1)
+plot(1:9,Verzoegerung,'o-')
+yline(0,'k--')
+xlabel('Wiederholung')
+ylabel('Verzögerung [s]')
+title('Zeitverschiebung gegenüber dem 60-s-Raster')
+grid on
+
+subplot(2,1,2)
+plot(1:9,Frequenz,'o-')
+yline(4.7,'r--','Soll: 4,7 Hz')
+xlabel('Wiederholung')
+ylabel('Frequenz [Hz]')
+title('Gemessene Frequenz pro Block')
+grid on
+
+
+
+
+
+%% Einstellungen
 t = RigolDS0{:,1};
 u = RigolDS0{:,2};
 
-idx = find(u(1:end-1) <= 5 & u(2:end) > 5) + 1;
+schwelle = 5;
+sollImpulse = 137;
+sollFrequenz = 4.7;
+sollZyklus = 60;
+startBlock = 1;    % Auswahl der ersten von 9 Wiederholungen
+
+%% Impulsanfänge erkennen
+idx = find(u(1:end-1) <= schwelle & u(2:end) > schwelle) + 1;
 p = t(idx);
-p = p([true; diff(p) > 0.15]);
 
+% Treffer unter 0,18 s Abstand zusammenfassen
+p = p([true; diff(p) > 0.18]);
+
+%% Stimulationsblöcke trennen
 block = cumsum([1; diff(p) > 5]);
-anzahl = accumarray(block,1);
-anzahl = anzahl(anzahl > 50);
-anzahl = anzahl(1:min(9,end));
+ids = unique(block);
 
-disp(table((1:length(anzahl))',anzahl,anzahl==137, ...
-    'VariableNames',{'Stim','Impulse','Genug'}))
+anzahlAlle = arrayfun(@(k) sum(block == k),ids);
+
+% Kleine Störgruppen entfernen
+ids = ids(anzahlAlle >= 50);
+
+% Neun aufeinanderfolgende vollständige Blöcke auswählen
+ids = ids(startBlock:startBlock+8);
+
+%% Werte je Block berechnen
+for k = 1:9
+    q = p(block == ids(k));
+
+    Anzahl(k,1) = length(q);
+    Start(k,1) = q(1);
+    Ende(k,1) = q(end);
+    Dauer(k,1) = q(end)-q(1);
+    Frequenz(k,1) = 1/mean(diff(q));
+end
+
+Startabstand = [NaN; diff(Start)];
+Pause = [Start(2:end)-Ende(1:end-1); NaN];
+
+% Erwartete Startzeiten bei exakt 60 Sekunden
+Sollstart = Start(1)+(0:8)'*sollZyklus;
+Verzoegerung = Start-Sollstart;
+
+Ergebnis = table((1:9)',Anzahl,Start,Ende,Dauer,...
+    Frequenz,Startabstand,Pause,Verzoegerung,...
+    'VariableNames',{'Block','Impulse','Start_s','Ende_s',...
+    'Dauer_s','Frequenz_Hz','Startabstand_s','Pause_s',...
+    'Verzoegerung_s'});
+
+disp(Ergebnis)
