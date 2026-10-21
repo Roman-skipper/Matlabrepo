@@ -239,3 +239,103 @@ fprintf('137er-Variante: %.5f Hz = 1/%.4f s\n', ...
         1/zyklus137,zyklus137);
 fprintf('Perfektes 30/30: %.5f Hz = 1/60 s\n', ...
         1/60);
+
+%% 11. FFT der Blockstartpunkte
+
+FsFFT = 100;       % 100 Abtastpunkte pro Sekunde
+TFFT = 540;        % 9 Zyklen mit jeweils 60 Sekunden
+zeitFFT = (0:1/FsFFT:TFFT-1/FsFFT)';
+
+% Drei Signale für die jeweiligen Blockstarts
+fftSignalMessung = zeros(size(zeitFFT));
+fftSignal137 = zeros(size(zeitFFT));
+fftSignalIdeal = zeros(size(zeitFFT));
+
+% Startzeiten in Abtastpunkte umrechnen
+idxMessung = round(messStart*FsFFT)+1;
+idx137 = round(start137*FsFFT)+1;
+idxIdeal = round(startPerfekt*FsFFT)+1;
+
+% Nur gültige Positionen verwenden
+idxMessung = idxMessung(idxMessung <= length(zeitFFT));
+idx137 = idx137(idx137 <= length(zeitFFT));
+idxIdeal = idxIdeal(idxIdeal <= length(zeitFFT));
+
+% An jedem Blockstart wird ein einzelner Marker gesetzt
+fftSignalMessung(idxMessung) = 1;
+fftSignal137(idx137) = 1;
+fftSignalIdeal(idxIdeal) = 1;
+
+%% FFT mit Zero-Padding
+% Zero-Padding zeichnet das Spektrum feiner
+NFFT = 2^20;
+
+Fmessung = abs(fft(fftSignalMessung,NFFT));
+F137 = abs(fft(fftSignal137,NFFT));
+Fideal = abs(fft(fftSignalIdeal,NFFT));
+
+frequenzFFT = (0:NFFT-1)'*(FsFFT/NFFT);
+
+% Nur Bereich um die Blockfrequenz untersuchen
+bereich = frequenzFFT >= 0.014 & frequenzFFT <= 0.020;
+
+fZoom = frequenzFFT(bereich);
+messZoom = Fmessung(bereich);
+f137Zoom = F137(bereich);
+idealZoom = Fideal(bereich);
+
+% Jede Kurve auf ihr Maximum normieren
+messZoom = messZoom/max(messZoom);
+f137Zoom = f137Zoom/max(f137Zoom);
+idealZoom = idealZoom/max(idealZoom);
+
+%% Position des jeweiligen Maximums
+[~,iMess] = max(messZoom);
+[~,i137] = max(f137Zoom);
+[~,iIdeal] = max(idealZoom);
+
+peakMessung = fZoom(iMess);
+peak137 = fZoom(i137);
+peakIdeal = fZoom(iIdeal);
+
+%% FFT zeichnen
+figure('Name','FFT der Blockstartpunkte', ...
+       'Position',[100 100 1100 600]);
+
+plot(fZoom,messZoom,'k','LineWidth',2);
+hold on;
+
+plot(fZoom,f137Zoom,'b','LineWidth',2);
+plot(fZoom,idealZoom,'r','LineWidth',2);
+
+% Berechnete FFT-Maxima markieren
+plot(peakMessung,1,'ko','MarkerFaceColor','k','MarkerSize',8);
+plot(peak137,1,'bo','MarkerFaceColor','b','MarkerSize',8);
+plot(peakIdeal,1,'ro','MarkerFaceColor','r','MarkerSize',8);
+
+% Theoretische Frequenzen markieren
+xline(1/60,'r--','Ideal: 1/60 Hz','LineWidth',1.5);
+xline(1/zyklus137,'b--','137er: 1/59,15 Hz','LineWidth',1.5);
+
+hold off;
+
+xlabel('Blockfrequenz [Hz]');
+ylabel('Normierte FFT-Stärke');
+title('FFT-Vergleich der Blockstartzeiten');
+legend('Messung','137 bei 4,7 Hz','Perfektes 30/30', ...
+       'FFT-Peak Messung','FFT-Peak 137','FFT-Peak Ideal', ...
+       'Location','best');
+
+xlim([0.0155 0.0180]);
+grid on;
+
+%% Ergebnisse ausgeben
+fprintf('\n--- FFT der Blockstarts ---\n');
+fprintf('FFT-Peak Messung:       %.6f Hz\n',peakMessung);
+fprintf('FFT-Peak 137er-Modell:  %.6f Hz\n',peak137);
+fprintf('FFT-Peak 30/30-Ideal:   %.6f Hz\n',peakIdeal);
+
+fprintf('\nDaraus berechnete Periodendauer:\n');
+fprintf('Messung:       %.4f s\n',1/peakMessung);
+fprintf('137er-Modell:  %.4f s\n',1/peak137);
+fprintf('30/30-Ideal:   %.4f s\n',1/peakIdeal);
