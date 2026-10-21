@@ -1,0 +1,4 @@
+d = diff(p);
+histogram(d(d < 1),100)
+xline(1/4.7,'r','4,7 Hz')
+xlabel('Abstand zwischen Impulsen [s]')
