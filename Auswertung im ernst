@@ -1,0 +1,13 @@
+t = RigolDS0{:,1};
+u = RigolDS0{:,2};
+
+p = t(t >= 0 & u > 5);
+p = p([true; diff(p) > 0.1]);
+
+block = cumsum([1; diff(p) > 5]);
+anzahl = accumarray(block,1);
+anzahl = anzahl(anzahl > 50);
+anzahl = anzahl(1:min(9,end));
+
+disp(table((1:length(anzahl))',anzahl,anzahl==137, ...
+    'VariableNames',{'Stim','Impulse','Genug'}))
