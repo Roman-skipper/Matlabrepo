@@ -74,3 +74,36 @@ Ergebnis = table((1:9)',Anzahl,Start,Ende,Dauer,...
     'Verzoegerung_s'});
 
 disp(Ergebnis)
+
+Fs = 100;
+A = 0;
+
+for k = 1:9
+    q = p(block == ids(k));
+    q = q-q(1);
+
+    z = zeros(1,round(31*Fs));
+    stellen = round(q*Fs)+1;
+    stellen = stellen(stellen <= length(z));
+    z(stellen) = 1;
+
+    A = A + abs(fft(z-mean(z)));
+end
+
+A = A/9;
+f = (0:length(A)-1)*Fs/length(A);
+
+bereich = f >= 4 & f <= 5.2;
+frequenzen = f(bereich);
+amplituden = A(bereich);
+[~,maximum] = max(amplituden);
+fftFrequenz = frequenzen(maximum);
+
+figure
+plot(f,A)
+xlim([0 15])
+xline(4.7,'r--','Soll: 4,7 Hz')
+xlabel('Frequenz [Hz]')
+ylabel('FFT-Stärke')
+title("FFT – stärkste Frequenz: " + fftFrequenz + " Hz")
+grid on
