@@ -1,6 +1,6 @@
 clear; clc; close all;
 
-%% 1. CSV auswählen und einlesen
+%% 1. CSV einlesen
 [datei, ordner] = uigetfile('*.csv', 'Wähle deine Rigol-CSV aus');
 
 if isequal(datei,0)
@@ -9,244 +9,232 @@ end
 
 daten = readmatrix(fullfile(ordner,datei));
 
-t = daten(:,1);       % Zeit
-u = daten(:,2);       % Spannung
+t = daten(:,1);
+u = daten(:,2);
 
-% Ungültige Werte entfernen
 gut = isfinite(t) & isfinite(u);
 t = t(gut);
 u = u(gut);
 
-% Nach Zeit sortieren
-[t, sortierung] = sort(t);
+[t,sortierung] = sort(t);
 u = u(sortierung);
 
 %% 2. Impulse erkennen
-schwelle = 5;             % Impuls beginnt beim Überschreiten von 5 V
-mindestAbstand = 0.18;    % verhindert Doppelzählungen
+schwelle = 5;
+mindestAbstand = 0.18;
 
-idx = find(u(1:end-1) <= schwelle & u(2:end) > schwelle) + 1;
+idx = find(u(1:end-1) <= schwelle & ...
+           u(2:end) > schwelle) + 1;
+
 pulse = t(idx);
 
-% Zu dicht liegende Erkennungen entfernen
+% Doppelzählungen entfernen
 pulseSauber = pulse(1);
 
 for k = 2:length(pulse)
-    if pulse(k) - pulseSauber(end) >= mindestAbstand
+    if pulse(k)-pulseSauber(end) >= mindestAbstand
         pulseSauber(end+1,1) = pulse(k);
     end
 end
 
 pulse = pulseSauber(:);
 
-%% 3. Impulse in Stimulationsblöcke aufteilen
-% Mehr als 5 Sekunden Abstand = neuer Block
-neuerBlock = [true; diff(pulse) > 5];
-blockNummer = cumsum(neuerBlock);
+%% 3. Stimulationsblöcke erkennen
+% Mehr als 5 Sekunden Abstand bedeutet neuer Block
+blockNummer = cumsum([true; diff(pulse) > 5]);
+blockGroesse = accumarray(blockNummer,1);
 
-anzahlRoh = accumarray(blockNummer,1);
+% Nur vollständige Blöcke
+volleBloecke = find(blockGroesse >= 50);
 
-% Nur vollständige Blöcke mit mindestens 50 Impulsen
-volleBloecke = find(anzahlRoh >= 50);
-anzahlBloecke = length(volleBloecke);
-
-blockStart = zeros(anzahlBloecke,1);
-blockEnde = zeros(anzahlBloecke,1);
-blockDauer = zeros(anzahlBloecke,1);
-anzahlImpulse = zeros(anzahlBloecke,1);
-frequenzGemessen = zeros(anzahlBloecke,1);
-
-alleMesspulse = [];
-
-for k = 1:anzahlBloecke
-    p = pulse(blockNummer == volleBloecke(k));
-
-    blockStart(k) = p(1);
-    blockEnde(k) = p(end);
-    blockDauer(k) = p(end) - p(1);
-    anzahlImpulse(k) = length(p);
-    frequenzGemessen(k) = 1/median(diff(p));
-
-    alleMesspulse = [alleMesspulse; p];
+if length(volleBloecke) < 9
+    error('Es wurden weniger als 9 vollständige Blöcke gefunden.');
 end
 
-% Ersten vollständigen Block auf Zeit 0 setzen
-blockStartRelativ = blockStart - blockStart(1);
-alleMesspulseRelativ = alleMesspulse - blockStart(1);
+% Nur die ersten 9 vollständigen Blöcke verwenden
+volleBloecke = volleBloecke(1:9);
 
-%% 4. Zwei ideale Varianten erzeugen
-fIdeal = 4.7;
+messStart = zeros(9,1);
+messDauer = zeros(9,1);
+messAnzahl = zeros(9,1);
 
-% Variante A: 137 Impulse bei 4,7 Hz + 30 s Pause
-impulse137 = 137;
-stimDauer137 = impulse137/fIdeal;
-zyklus137 = stimDauer137 + 30;
+for k = 1:9
+    p = pulse(blockNummer == volleBloecke(k));
 
-startIdeal137 = (0:anzahlBloecke-1)' * zyklus137;
+    messStart(k) = p(1);
+    messDauer(k) = p(end)-p(1);
+    messAnzahl(k) = length(p);
+end
 
-% Variante B: genau 30 s Stimulation + 30 s Ruhe
-impulse30s = round(30*fIdeal);       % ergibt 141 Impulse
-stimDauer30 = 30;
-zyklus30 = 60;
+% Erster Block beginnt bei 0 Sekunden
+messStart = messStart-messStart(1);
 
-startIdeal30 = (0:anzahlBloecke-1)' * zyklus30;
+%% 4. Zwei saubere künstliche Varianten
 
-%% 5. Ergebnisse als Tabelle
-abweichung137 = blockStartRelativ - startIdeal137;
-abweichung30 = blockStartRelativ - startIdeal30;
+% Variante A:
+% 4,7 Hz, 137 Mittelungen und danach 30 s Ruhe
+f = 4.7;
+anzahl137 = 137;
 
-Ergebnisse = table( ...
-    (1:anzahlBloecke)', ...
-    anzahlImpulse, ...
-    frequenzGemessen, ...
-    blockDauer, ...
-    blockStartRelativ, ...
-    startIdeal137, ...
-    startIdeal30, ...
+stimDauer137 = anzahl137/f;       % 29,1489 s
+zyklus137 = stimDauer137+30;      % 59,1489 s
+
+start137 = (0:8)'*zyklus137;
+dauer137 = ones(9,1)*stimDauer137;
+
+% Variante B:
+% Exakt 30 s Stimulation und 30 s Ruhe
+zyklusPerfekt = 60;
+
+startPerfekt = (0:8)'*zyklusPerfekt;
+dauerPerfekt = ones(9,1)*30;
+
+%% 5. Abweichung der Blockstarts
+abweichung137 = messStart-start137;
+abweichungPerfekt = messStart-startPerfekt;
+
+Tabelle = table( ...
+    (1:9)', ...
+    messAnzahl, ...
+    messStart, ...
+    messDauer, ...
+    start137, ...
     abweichung137, ...
-    abweichung30, ...
-    'VariableNames', { ...
-    'Block','Impulse','Frequenz_Hz','Dauer_s', ...
-    'Messstart_s','Ideal137_Start_s','Ideal30_Start_s', ...
-    'Abweichung_zu_137_s','Abweichung_zu_30s_s'});
+    startPerfekt, ...
+    abweichungPerfekt, ...
+    'VariableNames',{ ...
+    'Block', ...
+    'Gemessene_Impulse', ...
+    'Messstart_s', ...
+    'Messdauer_s', ...
+    'Start_137_s', ...
+    'Abweichung_zu_137_s', ...
+    'Start_30_30_s', ...
+    'Abweichung_zu_30_30_s'});
 
-disp(Ergebnisse);
+disp(Tabelle);
 
-fprintf('\nGefundene vollständige Blöcke: %d\n',anzahlBloecke);
-fprintf('Mittlere gemessene Frequenz: %.3f Hz\n',mean(frequenzGemessen));
-fprintf('137 Impulse bei 4,7 Hz: %.3f s Stimulationszeit\n',stimDauer137);
-fprintf('Perfekte 30 s bei 4,7 Hz: ungefähr %d Impulse\n',impulse30s);
+%% 6. Vergleich der neun Blockstarts
+figure('Name','Vergleich der Blockstarts');
 
-%% 6. Grafische Vergleiche
-figure('Name','Blockvergleich');
-
-subplot(2,2,1);
-bar(anzahlImpulse);
-yline(137,'r--','Eingestellt: 137');
-yline(141,'g--','30 s bei 4,7 Hz');
-xlabel('Block');
-ylabel('Impulse');
-title('Impulse pro Block');
-grid on;
-
-subplot(2,2,2);
-plot(1:anzahlBloecke,frequenzGemessen,'o-','LineWidth',1.5);
-yline(4.7,'r--','Ideal: 4,7 Hz');
-xlabel('Block');
-ylabel('Frequenz [Hz]');
-title('Gemessene Impulsfrequenz');
-grid on;
-
-subplot(2,2,3);
-plot(1:anzahlBloecke,blockStartRelativ,'ko-','LineWidth',1.5);
+plot(1:9,messStart,'ko-','LineWidth',2);
 hold on;
-plot(1:anzahlBloecke,startIdeal137,'b--','LineWidth',1.5);
-plot(1:anzahlBloecke,startIdeal30,'r--','LineWidth',1.5);
+plot(1:9,start137,'bo--','LineWidth',1.5);
+plot(1:9,startPerfekt,'ro--','LineWidth',1.5);
 hold off;
+
 xlabel('Block');
 ylabel('Startzeit [s]');
-title('Startzeiten der Blöcke');
-legend('Messung','4,7 Hz + 137','Perfektes 30/30','Location','best');
+title('Startzeiten der 9 Blöcke');
+legend('Messung','137 bei 4,7 Hz','Perfektes 30/30', ...
+       'Location','northwest');
 grid on;
 
-subplot(2,2,4);
-plot(1:anzahlBloecke,abweichung137,'bo-','LineWidth',1.5);
+%% 7. Zeitabweichung pro Block
+figure('Name','Zeitabweichung');
+
+plot(1:9,abweichung137,'bo-','LineWidth',2);
 hold on;
-plot(1:anzahlBloecke,abweichung30,'ro-','LineWidth',1.5);
+plot(1:9,abweichungPerfekt,'ro-','LineWidth',2);
 yline(0,'k--');
 hold off;
+
 xlabel('Block');
-ylabel('Zeitabweichung [s]');
-title('Entstehende Verzögerung');
-legend('gegenüber 137 + 30 s','gegenüber perfektem 30/30', ...
+ylabel('Abweichung [s]');
+title('Entsteht über die 9 Blöcke eine Verzögerung?');
+legend('gegenüber 137 bei 4,7 Hz', ...
+       'gegenüber perfektem 30/30', ...
        'Location','best');
 grid on;
 
-%% 7. Pulse für FFT erzeugen
-Fs = 100;   % künstliche Abtastrate für den Vergleich
+%% 8. Blockdauer vergleichen
+figure('Name','Dauer der Stimulation');
 
-gesamtZeit = max([blockStartRelativ(end)+60, ...
-                  startIdeal137(end)+zyklus137, ...
-                  startIdeal30(end)+60]);
+bar([messDauer dauer137 dauerPerfekt]);
 
-zeitFFT = (0:1/Fs:gesamtZeit)';
-messSignal = zeros(size(zeitFFT));
-ideal137Signal = zeros(size(zeitFFT));
-ideal30Signal = zeros(size(zeitFFT));
-
-% Gemessene Impulse
-messIdx = round(alleMesspulseRelativ*Fs)+1;
-messIdx = messIdx(messIdx >= 1 & messIdx <= length(messSignal));
-messSignal(messIdx) = 1;
-
-% Ideale Impulse
-for b = 1:anzahlBloecke
-    p137 = startIdeal137(b) + (0:136)/fIdeal;
-    i137 = round(p137*Fs)+1;
-    i137 = i137(i137 <= length(ideal137Signal));
-    ideal137Signal(i137) = 1;
-
-    p30 = startIdeal30(b) + (0:140)/fIdeal;
-    i30 = round(p30*Fs)+1;
-    i30 = i30(i30 <= length(ideal30Signal));
-    ideal30Signal(i30) = 1;
-end
-
-%% 8. FFT der einzelnen Impulse
-N = length(zeitFFT);
-frequenzAchse = (0:N-1)'*(Fs/N);
-
-fftMessung = abs(fft(messSignal-mean(messSignal)));
-fft137 = abs(fft(ideal137Signal-mean(ideal137Signal)));
-fft30 = abs(fft(ideal30Signal-mean(ideal30Signal)));
-
-figure('Name','FFT der Impulse');
-plot(frequenzAchse,fftMessung/max(fftMessung),'k','LineWidth',1.3);
-hold on;
-plot(frequenzAchse,fft137/max(fft137),'b--','LineWidth',1.3);
-plot(frequenzAchse,fft30/max(fft30),'r--','LineWidth',1.3);
-xlim([4 5.2]);
-xlabel('Frequenz [Hz]');
-ylabel('Normierte FFT-Stärke');
-title('FFT: Frequenz der einzelnen Impulse');
-legend('Messung','137 Impulse','Perfektes 30/30');
+xlabel('Block');
+ylabel('Stimulationsdauer [s]');
+title('Dauer der neun Stimulationsphasen');
+legend('Messung','137 bei 4,7 Hz','Perfekte 30 s', ...
+       'Location','best');
 grid on;
 
-%% 9. FFT der gesamten 30/30-Blöcke
-messBlockSignal = zeros(size(zeitFFT));
-ideal137BlockSignal = zeros(size(zeitFFT));
-ideal30BlockSignal = zeros(size(zeitFFT));
+%% 9. Blocksignale für die FFT erstellen
+Fs = 10;                 % 10 Werte pro Sekunde
+gesamtZeit = 540;        % 9 vollständige 60-s-Zyklen
+zeit = (0:1/Fs:gesamtZeit-1/Fs)';
 
-for b = 1:anzahlBloecke
-    % Gemessener Block
-    an = blockStartRelativ(b);
-    aus = an + blockDauer(b);
-    messBlockSignal(zeitFFT >= an & zeitFFT <= aus) = 1;
+signalMessung = zeros(size(zeit));
+signal137 = zeros(size(zeit));
+signalPerfekt = zeros(size(zeit));
 
-    % 137er-Ideal
-    an = startIdeal137(b);
-    aus = an + stimDauer137;
-    ideal137BlockSignal(zeitFFT >= an & zeitFFT <= aus) = 1;
+for k = 1:9
 
-    % Perfektes 30/30
-    an = startIdeal30(b);
-    aus = an + 30;
-    ideal30BlockSignal(zeitFFT >= an & zeitFFT <= aus) = 1;
+    % Gemessene Blöcke
+    signalMessung(zeit >= messStart(k) & ...
+                  zeit < messStart(k)+messDauer(k)) = 1;
+
+    % 137-Mittelungen-Variante
+    signal137(zeit >= start137(k) & ...
+              zeit < start137(k)+stimDauer137) = 1;
+
+    % Exakte 30/30-Variante
+    signalPerfekt(zeit >= startPerfekt(k) & ...
+                  zeit < startPerfekt(k)+30) = 1;
 end
 
-fftMessBlock = abs(fft(messBlockSignal-mean(messBlockSignal)));
-fft137Block = abs(fft(ideal137BlockSignal-mean(ideal137BlockSignal)));
-fft30Block = abs(fft(ideal30BlockSignal-mean(ideal30BlockSignal)));
+%% 10. Verlauf der drei Blocksignale
+figure('Name','Künstliche und gemessene Blocksignale');
 
-figure('Name','FFT der Blöcke');
-plot(frequenzAchse,fftMessBlock/max(fftMessBlock),'k','LineWidth',1.3);
+subplot(3,1,1);
+stairs(zeit,signalMessung,'k','LineWidth',1.5);
+ylabel('Messung');
+ylim([-0.2 1.2]);
+grid on;
+
+subplot(3,1,2);
+stairs(zeit,signal137,'b','LineWidth',1.5);
+ylabel('137 / 4,7 Hz');
+ylim([-0.2 1.2]);
+grid on;
+
+subplot(3,1,3);
+stairs(zeit,signalPerfekt,'r','LineWidth',1.5);
+ylabel('30/30');
+xlabel('Zeit [s]');
+ylim([-0.2 1.2]);
+grid on;
+
+%% 11. FFT der Stimulationsblöcke
+N = length(zeit);
+frequenz = (0:N-1)'*(Fs/N);
+
+fftMessung = abs(fft(signalMessung-mean(signalMessung)));
+fft137 = abs(fft(signal137-mean(signal137)));
+fftPerfekt = abs(fft(signalPerfekt-mean(signalPerfekt)));
+
+% Normieren
+fftMessung = fftMessung/max(fftMessung);
+fft137 = fft137/max(fft137);
+fftPerfekt = fftPerfekt/max(fftPerfekt);
+
+figure('Name','FFT der 9 Blöcke');
+
+plot(frequenz,fftMessung,'k','LineWidth',2);
 hold on;
-plot(frequenzAchse,fft137Block/max(fft137Block),'b--','LineWidth',1.3);
-plot(frequenzAchse,fft30Block/max(fft30Block),'r--','LineWidth',1.3);
-xline(1/60,'g--','1/60 Hz');
-xlim([0.005 0.03]);
+plot(frequenz,fft137,'b--','LineWidth',1.5);
+plot(frequenz,fftPerfekt,'r--','LineWidth',1.5);
+
+% Erwartete Wiederholungsfrequenzen
+xline(1/60,'r:','1/60 Hz');
+xline(1/zyklus137,'b:','1/59,15 Hz');
+
+hold off;
+
+xlim([0.005 0.04]);
 xlabel('Frequenz [Hz]');
 ylabel('Normierte FFT-Stärke');
-title('FFT: Wiederholung der Stimulationsblöcke');
-legend('Messung','137 Impulse','Perfektes 30/30','60-s-Frequenz');
+title('FFT der Blockwiederholung');
+legend('Messung','137 bei 4,7 Hz','Perfektes 30/30', ...
+       'Location','best');
 grid on;
