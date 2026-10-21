@@ -1,8 +1,9 @@
 t = RigolDS0{:,1};
 u = RigolDS0{:,2};
 
-p = t(t >= 0 & u > 5);
-p = p([true; diff(p) > 0.1]);
+idx = find(u(1:end-1) <= 5 & u(2:end) > 5) + 1;
+p = t(idx);
+p = p([true; diff(p) > 0.15]);
 
 block = cumsum([1; diff(p) > 5]);
 anzahl = accumarray(block,1);
