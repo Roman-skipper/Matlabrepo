@@ -1,0 +1,89 @@
+clear
+clc
+close all
+
+% Einstellungen
+dateiname = "RigolDS0.csv";
+schwelle = 5;          % Impuls muss über 5 V liegen
+mindestabstand = 0.1;  % Keine Doppelzählung innerhalb 0,1 s
+blockpause = 5;        % Abstand über 5 s = neuer Stimulationsblock
+sollImpulse = 137;
+sollBloecke = 9;
+
+% CSV laden
+daten = readtable(dateiname);
+zeit = daten{:,1};
+signal = daten{:,2};
+
+% Nur Daten ab 0 Sekunden und gültige Zahlen verwenden
+gueltig = zeit >= 0 & isfinite(zeit) & isfinite(signal);
+zeit = zeit(gueltig);
+signal = signal(gueltig);
+
+% Nach Zeit sortieren
+[zeit,reihenfolge] = sort(zeit);
+signal = signal(reihenfolge);
+
+% Doppelte Zeitpunkte zusammenfassen
+[zeit,~,gruppe] = unique(zeit);
+signal = accumarray(gruppe,signal,[],@max);
+
+% Überschreitungen der 5-V-Grenze erkennen
+stellen = find(signal(1:end-1) <= schwelle & ...
+               signal(2:end) > schwelle) + 1;
+
+impulszeiten = zeit(stellen);
+
+% Eng beieinanderliegende Treffer entfernen
+behalten = [true; diff(impulszeiten) >= mindestabstand];
+impulszeiten = impulszeiten(behalten);
+
+% Stimulationsblöcke anhand der langen Pausen trennen
+blocknummer = cumsum([1; diff(impulszeiten) > blockpause]);
+
+% Sehr kleine Störgruppen entfernen
+alleBloecke = unique(blocknummer);
+anzahlen = arrayfun(@(b) sum(blocknummer == b), alleBloecke);
+echteBloecke = alleBloecke(anzahlen >= 50);
+
+% Nur die ersten neun richtigen Blöcke verwenden
+echteBloecke = echteBloecke(1:min(sollBloecke,length(echteBloecke)));
+
+% Ergebnisse bestimmen
+ergebnis = table;
+
+for k = 1:length(echteBloecke)
+
+    t = impulszeiten(blocknummer == echteBloecke(k));
+    anzahl = length(t);
+
+    ergebnis.Block(k,1) = k;
+    ergebnis.Startzeit_s(k,1) = t(1);
+    ergebnis.Endzeit_s(k,1) = t(end);
+    ergebnis.AnzahlImpulse(k,1) = anzahl;
+    ergebnis.GenugSignale(k,1) = anzahl == sollImpulse;
+
+end
+
+disp(ergebnis)
+
+% Gesamtergebnis ausgeben
+if height(ergebnis) == 9 && all(ergebnis.GenugSignale)
+    disp("ERGEBNIS: Alle 9 Blöcke enthalten genau 137 Impulse.")
+else
+    disp("ERGEBNIS: Mindestens ein Block fehlt oder enthält nicht 137 Impulse.")
+end
+
+% Signal und erkannte Impulse anzeigen
+figure
+plot(zeit,signal,"b")
+hold on
+plot(impulszeiten, ...
+     interp1(zeit,signal,impulszeiten),"r.")
+hold off
+
+xlabel("Zeit [s]")
+ylabel("Spannung [V]")
+title("Erkannte Stimulationsimpulse")
+legend("Messsignal","Erkannte Impulse")
+grid on
