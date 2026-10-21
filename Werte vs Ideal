@@ -44,12 +44,20 @@ pulse = pulseSauber(:);
 blockNummer = cumsum([true; diff(pulse) > 5]);
 blockGroesse = accumarray(blockNummer,1);
 
-% Nur vollständige Blöcke
-volleBloecke = find(blockGroesse >= 50);
+% Die 9 größten Impulsgruppen auswählen
+[~, reihenfolge] = sort(blockGroesse,'descend');
 
-if length(volleBloecke) < 9
-    error('Es wurden weniger als 9 vollständige Blöcke gefunden.');
+if length(reihenfolge) < 9
+    error('In der Datei wurden insgesamt weniger als 9 Gruppen erkannt.');
 end
+
+volleBloecke = reihenfolge(1:9);
+
+% Anschließend wieder zeitlich sortieren
+volleBloecke = sort(volleBloecke);
+
+disp('Anzahl der erkannten Impulse in den 9 ausgewählten Blöcken:');
+disp(blockGroesse(volleBloecke)');
 
 % Nur die ersten 9 vollständigen Blöcke verwenden
 volleBloecke = volleBloecke(1:9);
