@@ -1,244 +1,27 @@
-clear
-clc
-close all
+clear; clc; close all;
 
-%% 1. Messdaten aus importierter MATLAB-Tabelle
-t = RigolDS0{:,1};
-u = RigolDS0{:,2};
-
-% Impulsbeginn beim Überschreiten von 5 V
-idx = find(u(1:end-1) <= 5 & u(2:end) > 5) + 1;
-p = t(idx);
-
-% Mehrfachtreffer innerhalb von 0,18 s entfernen
-p = p([true; diff(p) > 0.18]);
-
-% Blöcke durch Pausen über 5 s trennen
-block = cumsum([1; diff(p) > 5]);
-ids = unique(block);
-
-anzahlAlle = arrayfun(@(k) sum(block == k),ids);
-
-% Kleine Störgruppen entfernen
-ids = ids(anzahlAlle >= 50);
-B = length(ids);
-
-%% 2. Messwerte aller vollständigen Blöcke
-for k = 1:B
-    q = p(block == ids(k));
-
-    Anzahl(k,1) = length(q);
-    Start(k,1) = q(1);
-    Ende(k,1) = q(end);
-    Dauer(k,1) = q(end)-q(1);
-    Frequenz(k,1) = (length(q)-1)/Dauer(k);
+% CSV-Datei anklicken
+[datei, ordner] = uigetfile('*.csv', 'Wähle deine Rigol-CSV aus');
+if isequal(datei,0)
+    error('Keine Datei ausgewählt.');
 end
 
-StartRelativ = Start-Start(1);
-Startabstand = [NaN; diff(Start)];
-Pause = [Start(2:end)-Ende(1:end-1); NaN];
+% Daten direkt aus der CSV lesen
+daten = readmatrix(fullfile(ordner,datei));
 
-Messwerte = table((1:B)',Anzahl,StartRelativ,Dauer,...
-    Frequenz,Startabstand,Pause,...
-    'VariableNames',{'Block','Impulse','Start_s','Impulsbereich_s',...
-    'Frequenz_Hz','Startabstand_s','Pause_s'});
+% Erste Spalte = Zeit, zweite Spalte = Spannung
+t = daten(:,1);
+u = daten(:,2);
 
-disp("MESSWERTE:")
-disp(Messwerte)
+% Ungültige Zeilen entfernen
+gut = isfinite(t) & isfinite(u);
+t = t(gut);
+u = u(gut);
 
-%% 3. Zwei ideale Varianten erzeugen
-fIdeal = 4.7;
-N137 = 137;
-
-% Variante A: 137 Impulse und danach 30 s Pause
-stimFenster137 = N137/fIdeal;
-zyklus137 = stimFenster137 + 30;
-start137 = (0:B-1)'*zyklus137;
-
-pulse137 = [];
-for k = 1:B
-    pulse137 = [pulse137;
-        start137(k)+(0:N137-1)'/fIdeal];
-end
-
-% Variante B: perfektes 30 s / 30 s
-NPerfekt = round(fIdeal*30);       % ergibt 141 Impulse
-zyklusPerfekt = 60;
-startPerfekt = (0:B-1)'*zyklusPerfekt;
-
-pulsePerfekt = [];
-for k = 1:B
-    pulsePerfekt = [pulsePerfekt;
-        startPerfekt(k)+(0:NPerfekt-1)'/fIdeal];
-end
-
-% Alle gemessenen Impulse relativ zum ersten Block
-pulseMessung = [];
-
-for k = 1:B
-    q = p(block == ids(k));
-    pulseMessung = [pulseMessung; q-Start(1)];
-end
-
-%% 4. Zusammenfassung
-Zusammenfassung = table(...
-    ["Ideal: 4,7 Hz und 137";...
-     "Ideal: perfektes 30/30";...
-     "Messung: Mittelwert"],...
-    [137; NPerfekt; mean(Anzahl)],...
-    [fIdeal; fIdeal; mean(Frequenz)],...
-    [stimFenster137; 30; mean(Dauer)],...
-    [zyklus137; 60; mean(diff(Start))],...
-    'VariableNames',{'Variante','Impulse','Frequenz_Hz',...
-    'Stimulationsfenster_s','Startabstand_s'});
-
-disp("VERGLEICH:")
-disp(Zusammenfassung)
-
-%% 5. Startzeiten vergleichen
-figure
-
-plot(1:B,start137,'o-','LineWidth',1.5)
-hold on
-plot(1:B,startPerfekt,'o-','LineWidth',1.5)
-plot(1:B,StartRelativ,'o-','LineWidth',1.5)
-hold off
-
-xlabel('Block')
-ylabel('Startzeit [s]')
-title('Vergleich der Blockstartzeiten')
-legend('4,7 Hz / 137','Perfektes 30/30','Messung',...
-       'Location','northwest')
-grid on
-
-%% 6. Angesammelte Abweichung darstellen
-abweichung137 = StartRelativ-start137;
-abweichung60 = StartRelativ-startPerfekt;
-
-figure
-
-plot(1:B,abweichung137,'o-','LineWidth',1.5)
-hold on
-plot(1:B,abweichung60,'o-','LineWidth',1.5)
-yline(0,'k--')
-hold off
-
-xlabel('Block')
-ylabel('Angesammelte Abweichung [s]')
-title('Zeitliche Verschiebung der Messung')
-legend('gegenüber 4,7 Hz / 137','gegenüber perfektem 30/30')
-grid on
-
-%% 7. Impulsanzahl und Frequenz vergleichen
-figure
-
-subplot(2,1,1)
-bar(1:B,Anzahl)
-hold on
-yline(137,'r--','137')
-yline(141,'g--','141 für perfekte 30 s')
-hold off
-xlabel('Block')
-ylabel('Impulse')
-title('Gemessene Impulsanzahl')
-grid on
-
-subplot(2,1,2)
-plot(1:B,Frequenz,'o-','LineWidth',1.5)
-hold on
-yline(4.7,'r--','Soll: 4,7 Hz')
-hold off
-xlabel('Block')
-ylabel('Frequenz [Hz]')
-title('Gemessene Frequenz')
-grid on
-
-%% 8. Rasterdarstellung aller Impulse
-figure
-
-plot(pulse137,3*ones(size(pulse137)),'.')
-hold on
-plot(pulsePerfekt,2*ones(size(pulsePerfekt)),'.')
-plot(pulseMessung,ones(size(pulseMessung)),'.')
-hold off
-
-yticks([1 2 3])
-yticklabels({'Messung','Perfektes 30/30','4,7 Hz / 137'})
-xlabel('Zeit [s]')
-title('Zeitliche Lage aller Impulse')
-grid on
-
-%% 9. FFT der schnellen Impulse
-Fs = 100;
-Tmax = ceil(max([pulse137; pulsePerfekt; pulseMessung]))+30;
-tg = 0:1/Fs:Tmax;
-
-x137 = zeros(size(tg));
-xPerfekt = zeros(size(tg));
-xMessung = zeros(size(tg));
-
-i137 = round(pulse137*Fs)+1;
-iPerfekt = round(pulsePerfekt*Fs)+1;
-iMessung = round(pulseMessung*Fs)+1;
-
-x137(i137) = 1;
-xPerfekt(iPerfekt) = 1;
-xMessung(iMessung) = 1;
-
-f = (0:length(tg)-1)*Fs/length(tg);
-
-Y137 = abs(fft(x137-mean(x137)));
-YPerfekt = abs(fft(xPerfekt-mean(xPerfekt)));
-YMessung = abs(fft(xMessung-mean(xMessung)));
-
-figure
-
-plot(f,Y137/max(Y137),'LineWidth',1.2)
-hold on
-plot(f,YPerfekt/max(YPerfekt),'LineWidth',1.2)
-plot(f,YMessung/max(YMessung),'LineWidth',1.2)
-xline(4.7,'k--','4,7 Hz')
-hold off
-
-xlim([4 5.2])
-xlabel('Frequenz [Hz]')
-ylabel('Normierte FFT-Stärke')
-title('FFT der einzelnen Impulse')
-legend('4,7 Hz / 137','Perfektes 30/30','Messung')
-grid on
-
-%% 10. FFT der langsamen Blockstruktur
-env137 = zeros(size(tg));
-envPerfekt = zeros(size(tg));
-envMessung = zeros(size(tg));
-
-for k = 1:B
-    env137(tg >= start137(k) & ...
-           tg < start137(k)+stimFenster137) = 1;
-
-    envPerfekt(tg >= startPerfekt(k) & ...
-               tg < startPerfekt(k)+30) = 1;
-
-    envMessung(tg >= StartRelativ(k) & ...
-               tg <= StartRelativ(k)+Dauer(k)) = 1;
-end
-
-E137 = abs(fft(env137-mean(env137)));
-EPerfekt = abs(fft(envPerfekt-mean(envPerfekt)));
-EMessung = abs(fft(envMessung-mean(envMessung)));
-
-figure
-
-plot(f,E137/max(E137),'LineWidth',1.2)
-hold on
-plot(f,EPerfekt/max(EPerfekt),'LineWidth',1.2)
-plot(f,EMessung/max(EMessung),'LineWidth',1.2)
-xline(1/60,'k--','1/60 Hz')
-hold off
-
-xlim([0.005 0.05])
-xlabel('Frequenz [Hz]')
-ylabel('Normierte FFT-Stärke')
-title('FFT der Blockwiederholung')
-legend('4,7 Hz / 137','Perfektes 30/30','Messung')
-grid on
+% Signal anzeigen
+figure;
+plot(t,u);
+xlabel('Zeit [s]');
+ylabel('Spannung [V]');
+title('Rigol-Messung');
+grid on;
