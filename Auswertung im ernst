@@ -107,3 +107,46 @@ xlabel('Frequenz [Hz]')
 ylabel('FFT-Stärke')
 title("FFT – stärkste Frequenz: " + fftFrequenz + " Hz")
 grid on
+
+
+%% FFT der 60-s-Blöcke
+FsBlock = 10;                       % 10 Messpunkte pro Sekunde
+zeitGesamt = 9*sollZyklus;
+tb = 0:1/FsBlock:zeitGesamt-1/FsBlock;
+
+huellkurve = zeros(size(tb));
+
+% Stimulationszeiten als 1, Pausenzeiten als 0 darstellen
+for k = 1:9
+    startRelativ = Start(k)-Start(1);
+    endeRelativ = Ende(k)-Start(1);
+
+    huellkurve(tb >= startRelativ & tb <= endeRelativ) = 1;
+end
+
+% FFT berechnen
+Y = abs(fft(huellkurve-mean(huellkurve)));
+f = (0:length(Y)-1)*FsBlock/length(Y);
+
+% Stärkste Frequenz im erwarteten Blockbereich suchen
+bereich = f >= 0.01 & f <= 0.025;
+frequenzen = f(bereich);
+staerken = Y(bereich);
+
+[~,stelle] = max(staerken);
+gemesseneBlockfrequenz = frequenzen(stelle);
+gemesseneBlockdauer = 1/gemesseneBlockfrequenz;
+
+% Ergebnis anzeigen
+figure
+plot(f,Y)
+xlim([0 0.1])
+xline(1/60,'r--','Soll: 0,0167 Hz')
+xlabel('Frequenz [Hz]')
+ylabel('FFT-Stärke')
+title('FFT der Stimulationsblöcke')
+grid on
+
+fprintf('Blockfrequenz: %.5f Hz\n',gemesseneBlockfrequenz)
+fprintf('Entspricht einer Wiederholung alle %.2f Sekunden\n', ...
+    gemesseneBlockdauer)
