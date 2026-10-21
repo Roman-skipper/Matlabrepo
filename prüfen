@@ -2,3 +2,14 @@ d = diff(p);
 histogram(d(d < 1),100)
 xline(1/4.7,'r','4,7 Hz')
 xlabel('Abstand zwischen Impulsen [s]')
+
+
+for k = 1:9
+    q = p(block == k);
+    N(k,1) = length(q);
+    Dauer(k,1) = q(end)-q(1);
+    Frequenz(k,1) = 1/mean(diff(q));
+end
+
+table((1:9)',N,Dauer,Frequenz,...
+    'VariableNames',{'Stim','Impulse','Dauer_s','Frequenz_Hz'})
