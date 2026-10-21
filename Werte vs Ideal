@@ -173,8 +173,8 @@ nexttile;
 plot(1:9,ideal137MinusPerfekt,'bo-','LineWidth',2, ...
      'MarkerFaceColor','b');
 hold on;
-plot(1:9,messungMinusPerfekt,'ro-','LineWidth',2, ...
-     'MarkerFaceColor','r');
+plot(1:9,messungMinusPerfekt,'ko-','LineWidth',2, ...
+     'MarkerFaceColor','k');
 yline(0,'k--');
 hold off;
 
