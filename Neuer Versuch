@@ -1,0 +1,390 @@
+clear;
+clc;
+close all;
+
+%% =========================================================
+% EINSTELLUNGEN – diese Werte kannst du später leicht ändern
+% ==========================================================
+
+obereSchwelle = 5;       % Spannung, ab der ein Impuls erkannt wird
+untereSchwelle = 3;      % Spannung zum erneuten Scharfstellen
+mindestAbstand = 0.15;   % kürzerer Abstand = vermutlich Doppelzählung
+blockPause = 5;          % Pause über 5 s bedeutet neuer Block
+anzahlBloecke = 9;       % es sollen 9 Blöcke untersucht werden
+
+%% =========================================================
+% 1. CSV-DATEI AUSWÄHLEN
+% ==========================================================
+
+[datei,ordner] = uigetfile('*.csv','Rigol-CSV auswählen');
+
+if isequal(datei,0)
+    error('Keine Datei ausgewählt.');
+end
+
+daten = readmatrix(fullfile(ordner,datei));
+
+t = daten(:,1);       % Zeit
+u = daten(:,2);       % Spannung
+
+% Ungültige Daten entfernen
+gueltig = isfinite(t) & isfinite(u);
+t = t(gueltig);
+u = u(gueltig);
+
+% Daten zeitlich sortieren
+[t,reihenfolge] = sort(t);
+u = u(reihenfolge);
+
+fprintf('Geladene Messwerte: %d\n',length(t));
+
+%% =========================================================
+% 2. ZÄHLMETHODE A: EINFACHE 5-V-SCHWELLE
+% ==========================================================
+
+idxA = find(u(1:end-1) <= obereSchwelle & ...
+            u(2:end) > obereSchwelle) + 1;
+
+pulseA = t(idxA);
+
+% Zu dicht liegende Erkennungen entfernen
+pulseA_sauber = pulseA(1);
+
+for k = 2:length(pulseA)
+    if pulseA(k)-pulseA_sauber(end) >= mindestAbstand
+        pulseA_sauber(end+1,1) = pulseA(k);
+    end
+end
+
+pulseA = pulseA_sauber(:);
+
+%% =========================================================
+% 3. ZÄHLMETHODE B: HYSTERESE
+%
+% Ein Impuls beginnt über 5 V.
+% Ein neuer Impuls darf erst erkannt werden,
+% nachdem das Signal wieder unter 3 V gefallen ist.
+% ==========================================================
+
+pulseB = [];
+bereit = true;
+
+for k = 1:length(u)
+
+    if bereit && u(k) >= obereSchwelle
+        pulseB(end+1,1) = t(k);
+        bereit = false;
+    end
+
+    if ~bereit && u(k) <= untereSchwelle
+        bereit = true;
+    end
+end
+
+% Auch hier mögliche Doppelzählungen entfernen
+pulseB_sauber = pulseB(1);
+
+for k = 2:length(pulseB)
+    if pulseB(k)-pulseB_sauber(end) >= mindestAbstand
+        pulseB_sauber(end+1,1) = pulseB(k);
+    end
+end
+
+pulseB = pulseB_sauber(:);
+
+%% =========================================================
+% 4. ZÄHLMETHODE C: ZUSAMMENHÄNGENDE PULSBEREICHE
+%
+% Jeder zusammenhängende Bereich über 5 V zählt als Impuls.
+% Verwendet wird jeweils die Mitte des Bereiches.
+% ==========================================================
+
+signalHoch = u > obereSchwelle;
+
+starts = find(diff([false; signalHoch]) == 1);
+enden  = find(diff([signalHoch; false]) == -1);
+
+pulseC = (t(starts)+t(enden))/2;
+
+% Zu dicht liegende Bereiche zusammenfassen
+pulseC_sauber = pulseC(1);
+
+for k = 2:length(pulseC)
+    if pulseC(k)-pulseC_sauber(end) >= mindestAbstand
+        pulseC_sauber(end+1,1) = pulseC(k);
+    end
+end
+
+pulseC = pulseC_sauber(:);
+
+%% =========================================================
+% 5. BLÖCKE MIT DER HYSTERESE-METHODE ERKENNEN
+% ==========================================================
+
+blockNummer = cumsum([true; diff(pulseB) > blockPause]);
+blockGroesse = accumarray(blockNummer,1);
+
+% Ein echter Stimulationsblock besitzt hier mindestens 100 Impulse
+echteBloecke = find(blockGroesse >= 100);
+
+fprintf('\nInsgesamt erkannte große Blöcke: %d\n',length(echteBloecke));
+fprintf('Impulse in allen großen Blöcken:\n');
+disp(blockGroesse(echteBloecke)');
+
+if length(echteBloecke) < anzahlBloecke
+    error('Es wurden nur %d vollständige Blöcke gefunden.', ...
+          length(echteBloecke));
+end
+
+% Nur die ersten 9 vollständigen Blöcke untersuchen
+echteBloecke = echteBloecke(1:anzahlBloecke);
+
+%% =========================================================
+% 6. JEDEN BLOCK MIT ALLEN DREI METHODEN ZÄHLEN
+% ==========================================================
+
+anzahlA = zeros(anzahlBloecke,1);
+anzahlB = zeros(anzahlBloecke,1);
+anzahlC = zeros(anzahlBloecke,1);
+
+blockStart = zeros(anzahlBloecke,1);
+blockEnde = zeros(anzahlBloecke,1);
+blockDauer = zeros(anzahlBloecke,1);
+frequenzZeit = zeros(anzahlBloecke,1);
+
+pulseProBlock = cell(anzahlBloecke,1);
+
+for b = 1:anzahlBloecke
+
+    p = pulseB(blockNummer == echteBloecke(b));
+    pulseProBlock{b} = p;
+
+    blockStart(b) = p(1);
+    blockEnde(b) = p(end);
+
+    pulsAbstaende = diff(p);
+
+    % Dauer inklusive einer letzten typischen Pulsperiode
+    blockDauer(b) = p(end)-p(1)+median(pulsAbstaende);
+
+    % Frequenz direkt aus den Pulsabständen
+    frequenzZeit(b) = 1/median(pulsAbstaende);
+
+    % Zeitbereich dieses Blocks
+    linkerRand = p(1)-1;
+    rechterRand = p(end)+1;
+
+    anzahlA(b) = sum(pulseA >= linkerRand & pulseA <= rechterRand);
+    anzahlB(b) = sum(pulseB >= linkerRand & pulseB <= rechterRand);
+    anzahlC(b) = sum(pulseC >= linkerRand & pulseC <= rechterRand);
+end
+
+% Block 1 auf Zeit 0 setzen
+blockStartRelativ = blockStart-blockStart(1);
+
+%% =========================================================
+% 7. FOURIER-TRANSFORMATION
+%
+% Für jeden Block wird aus den erkannten Impulsen ein
+% gleichmäßig abgetastetes Signal erstellt.
+% Danach werden die FFTs aller 9 Blöcke gemittelt.
+% ==========================================================
+
+Fs = 100;             % künstliche Abtastrate: 100 Werte pro Sekunde
+fftDauer = 35;        % jeder Block erhält ein 35-s-Fenster
+N = round(fftDauer*Fs);
+
+% Zero-Padding für eine glattere Darstellung
+NFFT = 2^16;
+
+fftSumme = zeros(NFFT,1);
+
+for b = 1:anzahlBloecke
+
+    p = pulseProBlock{b};
+
+    % Erster Impuls des Blocks liegt bei t = 0
+    pRelativ = p-p(1);
+
+    impulsSignal = zeros(N,1);
+
+    impulsIdx = round(pRelativ*Fs)+1;
+    impulsIdx = impulsIdx(impulsIdx >= 1 & impulsIdx <= N);
+
+    impulsSignal(impulsIdx) = 1;
+
+    spektrum = abs(fft(impulsSignal,NFFT));
+    fftSumme = fftSumme+spektrum;
+end
+
+% Mittleres Spektrum aus allen 9 Blöcken
+fftMittel = fftSumme/anzahlBloecke;
+
+frequenzAchse = (0:NFFT-1)'*(Fs/NFFT);
+
+% Nur sinnvoller Bereich um etwa 4,7 Hz
+fftBereich = frequenzAchse >= 4 & frequenzAchse <= 5.2;
+
+fFFT = frequenzAchse(fftBereich);
+yFFT = fftMittel(fftBereich);
+
+% FFT normieren
+yFFT = yFFT/max(yFFT);
+
+% Höchsten FFT-Peak finden
+[~,peakPosition] = max(yFFT);
+frequenzFFT = fFFT(peakPosition);
+
+%% =========================================================
+% 8. ERGEBNISTABELLE
+% ==========================================================
+
+Ergebnisse = table( ...
+    (1:anzahlBloecke)', ...
+    anzahlA, ...
+    anzahlB, ...
+    anzahlC, ...
+    blockStartRelativ, ...
+    blockDauer, ...
+    frequenzZeit, ...
+    'VariableNames',{ ...
+    'Block', ...
+    'Impulse_Schwelle', ...
+    'Impulse_Hysterese', ...
+    'Impulse_Pulsbereiche', ...
+    'Startzeit_s', ...
+    'Dauer_s', ...
+    'Frequenz_aus_Zeit_Hz'});
+
+disp(Ergebnisse);
+
+fprintf('\n========================================\n');
+fprintf('ZUSAMMENFASSUNG\n');
+fprintf('========================================\n');
+
+fprintf('Mittlere Frequenz aus Pulsabständen: %.4f Hz\n', ...
+        mean(frequenzZeit));
+
+fprintf('Frequenz aus Fourier-Transformation: %.4f Hz\n', ...
+        frequenzFFT);
+
+fprintf('Mittlere Zahl der Impulse pro Block: %.2f\n', ...
+        mean(anzahlB));
+
+fprintf('Kleinste Impulszahl: %d\n',min(anzahlB));
+fprintf('Größte Impulszahl:   %d\n',max(anzahlB));
+
+%% =========================================================
+% 9. GRAFISCHE AUSWERTUNG
+% ==========================================================
+
+figure('Name','Impulsanalyse', ...
+       'Position',[100 100 1200 800]);
+
+tiledlayout(2,2);
+
+% ---------------------------------------------------------
+% Grafik 1: Rohsignal mit erkannten Impulsen
+% ---------------------------------------------------------
+
+nexttile;
+
+ersterBlock = pulseProBlock{1};
+anfang = ersterBlock(1);
+ende = min(anfang+3,ersterBlock(end));
+
+bereichSignal = t >= anfang & t <= ende;
+bereichPulse = pulseB >= anfang & pulseB <= ende;
+
+plot(t(bereichSignal)-anfang,u(bereichSignal),'k');
+hold on;
+
+pAnzeige = pulseB(bereichPulse);
+plot(pAnzeige-anfang, ...
+     ones(size(pAnzeige))*obereSchwelle, ...
+     'ro','MarkerFaceColor','r');
+
+yline(obereSchwelle,'b--','5-V-Schwelle');
+hold off;
+
+xlabel('Zeit seit Blockbeginn [s]');
+ylabel('Spannung [V]');
+title('Erkannte Impulse in den ersten 3 Sekunden');
+grid on;
+
+% ---------------------------------------------------------
+% Grafik 2: Vergleich der drei Zählmethoden
+% ---------------------------------------------------------
+
+nexttile;
+
+bar(1:anzahlBloecke,[anzahlA anzahlB anzahlC]);
+
+xlabel('Block');
+ylabel('Anzahl erkannter Impulse');
+title('Impulszahl mit drei Zählmethoden');
+legend('5-V-Schwelle','Hysterese','Pulsbereiche', ...
+       'Location','best');
+xticks(1:anzahlBloecke);
+grid on;
+
+% ---------------------------------------------------------
+% Grafik 3: Frequenz jedes Blocks
+% ---------------------------------------------------------
+
+nexttile;
+
+plot(1:anzahlBloecke,frequenzZeit, ...
+     'ko-','LineWidth',2,'MarkerFaceColor','k');
+
+hold on;
+yline(4.7,'r--','Eingestellt: 4,7 Hz');
+yline(mean(frequenzZeit),'b--','Gemessener Mittelwert');
+hold off;
+
+xlabel('Block');
+ylabel('Frequenz [Hz]');
+title('Frequenz aus den Pulsabständen');
+xticks(1:anzahlBloecke);
+grid on;
+
+% ---------------------------------------------------------
+% Grafik 4: Fourier-Transformation
+% ---------------------------------------------------------
+
+nexttile;
+
+plot(fFFT,yFFT,'b','LineWidth',2);
+hold on;
+
+xline(frequenzFFT,'k--', ...
+      sprintf('FFT: %.4f Hz',frequenzFFT));
+
+xline(4.7,'r--','Eingestellt: 4,7 Hz');
+
+hold off;
+
+xlabel('Frequenz [Hz]');
+ylabel('Normierte FFT-Stärke');
+title('Fourier-Transformation der Einzelimpulse');
+xlim([4 5.2]);
+grid on;
+
+%% =========================================================
+% 10. ZEITABSTÄNDE ALLER IMPULSE
+% ==========================================================
+
+alleAbstaende = [];
+
+for b = 1:anzahlBloecke
+    alleAbstaende = [alleAbstaende; diff(pulseProBlock{b})];
+end
+
+figure('Name','Verteilung der Pulsabstände');
+
+histogram(alleAbstaende,30);
+
+xlabel('Abstand zwischen zwei Impulsen [s]');
+ylabel('Anzahl');
+title('Verteilung sämtlicher Pulsabstände');
+grid on;
