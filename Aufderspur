@@ -26,7 +26,8 @@ namen = [
 sollFrequenz = [4.7; 4.6; 4.7; 4.7; 4.7];
 sollImpulse  = [137; 137; 141; 137; 137];
 
-% Annahme: normaler Sweep = 80 ms
+% Falls der normale Sweep nicht 80 ms betrug:
+% diese Werte entsprechend ändern
 sollSweep_ms = [80; 80; 80; 40; 80];
 
 sollPause_s = [30; 30; 30; 30; 10];
@@ -34,8 +35,7 @@ sollPause_s = [30; 30; 30; 30; 10];
 anzahlMessungen = 5;
 anzahlBloecke = 9;
 
-% Einstellungen für die Erkennung
-schwelle = 5;
+% Einstellungen für die Impulserkennung
 mindestAbstand = 0.15;
 blockTrennung = 5;
 
@@ -60,7 +60,7 @@ idealStarts = cell(anzahlMessungen,1);
 blockImpulse = cell(anzahlMessungen,1);
 
 %% =========================================================
-% 3. FÜNF DATEIEN NACHEINANDER AUSWERTEN
+% 3. ALLE FÜNF DATEIEN AUSWERTEN
 % ==========================================================
 
 for m = 1:anzahlMessungen
@@ -73,15 +73,13 @@ for m = 1:anzahlMessungen
     fprintf('Datei: %s\n',aktuelleDatei);
     fprintf('========================================\n');
 
-    %% Prüfen, ob die Datei existiert
+    %% Prüfen, ob Datei vorhanden ist
 
     if ~isfile(aktuelleDatei)
         error('Die Datei %s wurde nicht gefunden.',aktuelleDatei);
     end
 
-    %% -----------------------------------------------------
-    % Erste Zeile der Rigol-Datei lesen
-    % ------------------------------------------------------
+    %% Erste Zeile der Rigol-Datei lesen
 
     fid = fopen(aktuelleDatei,'r');
 
@@ -99,10 +97,7 @@ for m = 1:anzahlMessungen
 
     fprintf('Kopfzeile: %s\n',kopfzeile);
 
-    %% -----------------------------------------------------
-    % t0 aus der Kopfzeile lesen
-    % Beispiel: t0 = -123s
-    % ------------------------------------------------------
+    %% t0 auslesen
 
     t0Treffer = regexpi( ...
         kopfzeile, ...
@@ -116,10 +111,7 @@ for m = 1:anzahlMessungen
 
     t0 = str2double(t0Treffer{1});
 
-    %% -----------------------------------------------------
-    % tInc aus der Kopfzeile lesen
-    % Beispiel: tInc = 1e-05s
-    % ------------------------------------------------------
+    %% tInc auslesen
 
     tIncTreffer = regexpi( ...
         kopfzeile, ...
@@ -134,19 +126,17 @@ for m = 1:anzahlMessungen
     tInc = str2double(tIncTreffer{1});
 
     if ~isfinite(t0)
-        error('Der gelesene Wert für t0 ist ungültig.');
+        error('Der Wert für t0 ist ungültig.');
     end
 
     if ~isfinite(tInc) || tInc <= 0
-        error('Der gelesene Wert für tInc ist ungültig.');
+        error('Der Wert für tInc ist ungültig.');
     end
 
-    fprintf('Erkanntes t0: %.10g s\n',t0);
-    fprintf('Erkanntes tInc: %.10g s\n',tInc);
+    fprintf('t0: %.10g s\n',t0);
+    fprintf('tInc: %.10g s\n',tInc);
 
-    %% -----------------------------------------------------
-    % Spannungswerte ab der zweiten Zeile laden
-    % ------------------------------------------------------
+    %% Spannungswerte laden
 
     daten = readmatrix( ...
         aktuelleDatei, ...
@@ -157,44 +147,52 @@ for m = 1:anzahlMessungen
               aktuelleDatei);
     end
 
-    % Nur die erste Spalte enthält die Spannung
+    % Nur erste Spalte verwenden
     u = daten(:,1);
 
-    % Ungültige Werte entfernen
+    % NaN-Werte entfernen
     u = u(isfinite(u));
 
     if isempty(u)
-        error('In %s wurden keine gültigen Spannungen gefunden.', ...
+        error('In %s wurden keine gültigen Spannungswerte gefunden.', ...
               aktuelleDatei);
     end
 
-    %% Zeitachse aus t0 und tInc erzeugen
+    %% Zeitachse erzeugen
 
     t = t0 + (0:length(u)-1)'*tInc;
 
-    fprintf('Anzahl Messwerte: %d\n',length(u));
-    fprintf('Aufnahmedauer: %.3f s\n',t(end)-t(1));
-    fprintf('Kleinste Spannung: %.3f V\n',min(u));
-    fprintf('Größte Spannung: %.3f V\n',max(u));
+    unteresNiveau = min(u);
+    oberesNiveau = max(u);
 
-    %% -----------------------------------------------------
-    % Impulse erkennen
-    % ------------------------------------------------------
+    fprintf('Messwerte: %d\n',length(u));
+    fprintf('Aufnahmedauer: %.3f s\n',t(end)-t(1));
+    fprintf('Minimum: %.3f V\n',unteresNiveau);
+    fprintf('Maximum: %.3f V\n',oberesNiveau);
+
+    %% Automatische Spannungsschwelle
+
+    schwelleAktuell = ...
+        unteresNiveau + 0.5*(oberesNiveau-unteresNiveau);
+
+    fprintf('Automatische Schwelle: %.3f V\n',schwelleAktuell);
+
+    %% Impulse erkennen
 
     idx = find( ...
-        u(1:end-1) <= schwelle & ...
-        u(2:end) > schwelle) + 1;
+        u(1:end-1) <= schwelleAktuell & ...
+        u(2:end) > schwelleAktuell) + 1;
 
     pulseRoh = t(idx);
 
     if isempty(pulseRoh)
         error([ ...
-            'In %s wurden keine Impulse über %.1f V erkannt. ' ...
+            'In %s wurden keine Impulse über %.3f V erkannt. ' ...
             'Die höchste Spannung beträgt %.3f V.'], ...
-            aktuelleDatei,schwelle,max(u));
+            aktuelleDatei,schwelleAktuell,oberesNiveau);
     end
 
-    %% Mögliche Doppelzählungen entfernen
+    %% Doppelzählungen entfernen
 
     pulse = pulseRoh(1);
 
@@ -209,9 +207,7 @@ for m = 1:anzahlMessungen
 
     fprintf('Insgesamt erkannte Impulse: %d\n',length(pulse));
 
-    %% -----------------------------------------------------
-    % Impulse in Blöcke einteilen
-    % ------------------------------------------------------
+    %% Impulse in Blöcke einteilen
 
     neuerBlock = [true; diff(pulse) > blockTrennung];
 
@@ -219,8 +215,7 @@ for m = 1:anzahlMessungen
 
     blockGroesse = accumarray(blockNummer,1);
 
-    % Ein echter Block muss mindestens 60 Prozent
-    % der erwarteten Impulse besitzen
+    % Ein echter Block benötigt mindestens 60 % der Sollimpulse
     minimumImpulse = round(0.60*sollImpulse(m));
 
     echteBloecke = find(blockGroesse >= minimumImpulse);
@@ -239,12 +234,10 @@ for m = 1:anzahlMessungen
             aktuelleDatei,length(echteBloecke));
     end
 
-    % Die ersten neun vollständigen Blöcke verwenden
+    % Nur die ersten neun vollständigen Blöcke
     echteBloecke = echteBloecke(1:anzahlBloecke);
 
-    %% -----------------------------------------------------
-    % Werte für jeden Block bestimmen
-    % ------------------------------------------------------
+    %% Kennwerte der neun Blöcke
 
     impulseProBlock = zeros(anzahlBloecke,1);
     frequenzProBlock = zeros(anzahlBloecke,1);
@@ -280,16 +273,14 @@ for m = 1:anzahlMessungen
 
     blockImpulse{m} = impulseProBlock;
 
-    % Ersten Block auf 0 Sekunden setzen
+    % Start des ersten Blocks auf 0 Sekunden setzen
     startProBlock = ...
         startProBlock-startProBlock(1);
 
-    % Zeit zwischen den Blockstarts
+    % Zeit zwischen zwei Blockstarts
     zyklusProBlock = diff(startProBlock);
 
-    %% -----------------------------------------------------
-    % Ideales Szenario dieser Messung
-    % ------------------------------------------------------
+    %% Ideales Szenario berechnen
 
     idealeStimDauer = ...
         (sollImpulse(m)-1)/sollFrequenz(m);
@@ -305,9 +296,7 @@ for m = 1:anzahlMessungen
     messStarts{m} = startProBlock;
     idealStarts{m} = idealStart;
 
-    %% -----------------------------------------------------
-    % Mittelwerte
-    % ------------------------------------------------------
+    %% Mittelwerte berechnen
 
     mittelImpulse(m) = mean(impulseProBlock);
 
@@ -317,9 +306,7 @@ for m = 1:anzahlMessungen
 
     mittelZyklus(m) = mean(zyklusProBlock);
 
-    %% -----------------------------------------------------
-    % Fourier-Transformation
-    % ------------------------------------------------------
+    %% Fourier-Transformation
 
     FsFFT = 100;
     fftFenster = 35;
@@ -332,7 +319,7 @@ for m = 1:anzahlMessungen
 
         p = pulseDerBloecke{b};
 
-        % Erster Impuls des Blocks liegt bei 0 Sekunden
+        % Erster Impuls wird auf 0 Sekunden gesetzt
         pRelativ = p-p(1);
 
         impulsSignal = zeros(N,1);
@@ -367,9 +354,7 @@ for m = 1:anzahlMessungen
 
     fftFrequenz(m) = fSuche(peakPosition);
 
-    %% -----------------------------------------------------
-    % Relative Abweichungen
-    % ------------------------------------------------------
+    %% Relative Abweichungen
 
     abwImpulse(m) = ...
         abs(mittelImpulse(m)-sollImpulse(m)) ...
@@ -394,7 +379,7 @@ for m = 1:anzahlMessungen
         abwZyklus(m)
     ]);
 
-    %% Große Messdaten vor der nächsten Datei entfernen
+    %% Große Messdaten vor der nächsten Datei löschen
 
     clear daten t u pulse pulseRoh idx
 
@@ -471,7 +456,7 @@ grid on;
 % ==========================================================
 
 figure( ...
-    'Name','Abweichungen vom jeweiligen Ideal', ...
+    'Name','Abweichung vom jeweiligen Ideal', ...
     'Position',[100 50 1200 850]);
 
 tiledlayout(3,2);
@@ -480,6 +465,8 @@ for m = 1:anzahlMessungen
 
     nexttile;
 
+    % Positive Werte: Messung beginnt zu spät
+    % Negative Werte: Messung beginnt zu früh
     differenz = ...
         messStarts{m}-idealStarts{m};
 
@@ -523,6 +510,7 @@ bar(teilAbweichungen,'grouped');
 
 hold on;
 
+% Schwarzer Punkt = Mittelwert der vier Abweichungen
 plot( ...
     1:anzahlMessungen, ...
     gesamtAbweichung, ...
