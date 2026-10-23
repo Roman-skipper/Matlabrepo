@@ -645,3 +645,67 @@ fprintf('========================================\n');
 
 fprintf('Parameter: %s\n',char(parameterNamen(position)));
 fprintf('Relative Abweichung: %.2f %%\n',groessterFehler);
+
+%% Normal und Sweep direkt vergleichen
+
+startNormal = messStarts{1};
+startSweep = messStarts{4};
+
+% Beide Aufnahmen beginnen bei 0
+startDifferenz = startSweep-startNormal;
+
+zyklusNormal = diff(startNormal);
+zyklusSweep = diff(startSweep);
+zyklusDifferenz = zyklusSweep-zyklusNormal;
+
+VergleichNormalSweep = table( ...
+    (1:9)', ...
+    startNormal, ...
+    startSweep, ...
+    startDifferenz, ...
+    'VariableNames',{ ...
+    'Block', ...
+    'Start_Normal_s', ...
+    'Start_Sweep_s', ...
+    'Differenz_Sweep_minus_Normal_s'});
+
+disp(VergleichNormalSweep);
+
+figure('Name','Normal gegen Sweep');
+
+subplot(2,1,1);
+
+plot(1:9,startNormal,'ko-','LineWidth',2);
+hold on;
+plot(1:9,startSweep,'bo--','LineWidth',2);
+hold off;
+
+xlabel('Block');
+ylabel('Startzeit [s]');
+title('Blockstarts: Normal gegen Sweep 40 ms');
+legend('Normal','Sweep 40 ms','Location','best');
+xticks(1:9);
+grid on;
+
+subplot(2,1,2);
+
+plot(1:9,startDifferenz*1000, ...
+    'ro-','LineWidth',2,'MarkerFaceColor','r');
+
+hold on;
+yline(0,'k--','Kein Unterschied');
+hold off;
+
+xlabel('Block');
+ylabel('Zeitunterschied [ms]');
+title('Sweep minus Normal');
+xticks(1:9);
+grid on;
+
+fprintf('\nNORMAL GEGEN SWEEP\n');
+fprintf('Mittlere Zyklusdauer Normal: %.6f s\n',mean(zyklusNormal));
+fprintf('Mittlere Zyklusdauer Sweep:  %.6f s\n',mean(zyklusSweep));
+fprintf('Mittlerer Zyklusunterschied: %.3f ms\n', ...
+        mean(zyklusDifferenz)*1000);
+fprintf('Unterschied bei Block 9:     %.3f ms\n', ...
+        startDifferenz(9)*1000);
