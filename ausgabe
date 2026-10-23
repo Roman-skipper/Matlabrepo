@@ -1,119 +1,647 @@
+clear;
+clc;
+close all;
 
-========================================
-Messung: Referenz
-Datei: normal0.csv
-========================================
-Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
-t0: -123 s
-tInc: 1e-05 s
-Messwerte: 52300000
-Aufnahmedauer: 523.000 s
-Minimum: -21.476 V
-Maximum: 1.263 V
-Automatische Schwelle: -10.106 V
-Insgesamt erkannte Impulse: 1240
-Erkannte vollständige Blöcke: 9
-Impulse pro vollständigem Block:
-   137   137   138   138   138   138   138   138   138
+%% =========================================================
+% 1. EINSTELLUNGEN
+% ==========================================================
 
+dateien = [
+    "normal0.csv"
+    "frequenz0.csv"
+    "mittlung0.csv"
+    "sweep0.csv"
+    "pause0.csv"
+];
 
-========================================
-Messung: Frequenz 4,6 Hz
-Datei: frequenz0.csv
-========================================
-Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
-t0: -123 s
-tInc: 1e-05 s
-Messwerte: 66300000
-Aufnahmedauer: 663.000 s
-Minimum: -21.476 V
-Maximum: 0.842 V
-Automatische Schwelle: -10.317 V
-Insgesamt erkannte Impulse: 1509
-Erkannte vollständige Blöcke: 11
-Impulse pro vollständigem Block:
-   137   138   137   137   138   137   137   137   137   137   137
+namen = [
+    "Referenz"
+    "Frequenz 4,6 Hz"
+    "141 Mittelungen"
+    "Sweep 40 ms"
+    "Pause 10 s"
+];
 
+% Eingestellte Parameter
+sollFrequenz = [4.7; 4.6; 4.7; 4.7; 4.7];
+sollImpulse  = [137; 137; 141; 137; 137];
+sollSweep_ms = [80; 80; 80; 40; 80];
+sollPause_s  = [30; 30; 30; 30; 10];
 
-========================================
-Messung: 141 Mittelungen
-Datei: mittlung0.csv
-========================================
-Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
-t0: -123 s
-tInc: 1e-05 s
-Messwerte: 62600000
-Aufnahmedauer: 626.000 s
-Minimum: -21.476 V
-Maximum: 1.263 V
-Automatische Schwelle: -10.106 V
-Insgesamt erkannte Impulse: 1477
-Erkannte vollständige Blöcke: 10
-Impulse pro vollständigem Block:
-   141   142   142   141   142   142   141   141   141   141
+anzahlMessungen = 5;
+anzahlBloecke = 9;
 
+% Erkennungseinstellungen
+mindestAbstand = 0.15;
+blockTrennung = 5;
 
-========================================
-Messung: Sweep 40 ms
-Datei: sweep0.csv
-========================================
-Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
-t0: -123 s
-tInc: 1e-05 s
-Messwerte: 55400000
-Aufnahmedauer: 554.000 s
-Minimum: -21.476 V
-Maximum: 0.842 V
-Automatische Schwelle: -10.317 V
-Insgesamt erkannte Impulse: 1253
-Erkannte vollständige Blöcke: 9
-Impulse pro vollständigem Block:
-   137   138   137   137   138   138   137   138   137
+%% =========================================================
+% 2. ERGEBNISSE VORBEREITEN
+% ==========================================================
 
+mittelImpulse = zeros(anzahlMessungen,1);
+mittelFrequenz = zeros(anzahlMessungen,1);
+fftFrequenz = zeros(anzahlMessungen,1);
+mittelStimDauer = zeros(anzahlMessungen,1);
+mittelZyklus = zeros(anzahlMessungen,1);
 
-========================================
-Messung: Pause 10 s
-Datei: pause0.csv
-========================================
-Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
-t0: -123 s
-tInc: 1e-05 s
-Messwerte: 39900000
-Aufnahmedauer: 399.000 s
-Minimum: -21.476 V
-Maximum: 1.263 V
-Automatische Schwelle: -10.106 V
-Insgesamt erkannte Impulse: 1376
-Erkannte vollständige Blöcke: 10
-Impulse pro vollständigem Block:
-   138   137   137   137   138   138   138   138   138   137
+idealStimDauer = zeros(anzahlMessungen,1);
+idealZyklus = zeros(anzahlMessungen,1);
 
-         Messung         Impulse_Soll    Impulse_Gemessen    Frequenz_Soll_Hz    Frequenz_aus_Zeit_Hz    Frequenz_FFT_Hz    Stimulationsdauer_s    Zyklusdauer_s    Abweichung_Impulse_Prozent    Abweichung_Frequenz_Prozent    Abweichung_Stimdauer_Prozent    Abweichung_Zyklus_Prozent    Gesamtabweichung_Prozent
-    _________________    ____________    ________________    ________________    ____________________    _______________    ___________________    _____________    __________________________    ___________________________    ____________________________    _________________________    ________________________
+abwImpulse = zeros(anzahlMessungen,1);
+abwFrequenz = zeros(anzahlMessungen,1);
+abwStimDauer = zeros(anzahlMessungen,1);
+abwZyklus = zeros(anzahlMessungen,1);
 
-    "Referenz"               137              137.78               4.7                  4.6083               4.6066               29.685               59.99                 0.56772                        1.9512                          2.5873                        1.6507                       1.6892         
-    "Frequenz 4,6 Hz"        137              137.22               4.6                  4.5045               4.5013               30.257              60.678                 0.16221                         2.076                          2.3383                        1.7308                       1.5768         
-    "141 Mittelungen"        141              141.44               4.7                  4.6083               4.6066               30.483              60.961                 0.31521                        1.9512                          2.3365                        1.8269                       1.6075         
-    "Sweep 40 ms"            137              137.44               4.7                  4.6083               4.6066                29.61              59.982                 0.32441                        1.9512                          2.3275                         1.705                        1.577         
-    "Pause 10 s"             137              137.67               4.7                  4.6083               4.6066               29.661              39.999                 0.48662                        1.9512                          2.5039                        2.5195                       1.8653         
+messStarts = cell(anzahlMessungen,1);
+idealStarts = cell(anzahlMessungen,1);
+blockImpulse = cell(anzahlMessungen,1);
 
+%% =========================================================
+% 3. ALLE FÜNF DATEIEN AUSWERTEN
+% ==========================================================
 
-========================================
-GRÖSSTE RELATIVE GESAMTABWEICHUNG
-========================================
-Messung: Pause 10 s
-Gesamtabweichung: 1.87 %
+for m = 1:anzahlMessungen
 
-Teilabweichungen:
-Impulszahl:        0.49 %
-Frequenz:          1.95 %
-Stimulationsdauer: 2.50 %
-Zyklusdauer:       2.52 %
+    aktuelleDatei = char(dateien(m));
+    aktuellerName = char(namen(m));
 
-FFT-Frequenzen:
-Referenz: 4.6066 Hz
-Frequenz 4,6 Hz: 4.5013 Hz
-141 Mittelungen: 4.6066 Hz
-Sweep 40 ms: 4.6066 Hz
-Pause 10 s: 4.6066 Hz
->> 
+    fprintf('\n========================================\n');
+    fprintf('Messung: %s\n',aktuellerName);
+    fprintf('Datei: %s\n',aktuelleDatei);
+    fprintf('========================================\n');
+
+    %% Datei prüfen
+
+    if ~isfile(aktuelleDatei)
+        error('Die Datei %s wurde nicht gefunden.',aktuelleDatei);
+    end
+
+    %% Kopfzeile lesen
+
+    fid = fopen(aktuelleDatei,'r');
+
+    if fid == -1
+        error('Die Datei %s konnte nicht geöffnet werden.', ...
+              aktuelleDatei);
+    end
+
+    kopfzeile = fgetl(fid);
+    fclose(fid);
+
+    if ~ischar(kopfzeile)
+        error('Die Datei %s ist leer.',aktuelleDatei);
+    end
+
+    %% t0 auslesen
+
+    t0Treffer = regexpi( ...
+        kopfzeile, ...
+        't0\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*s', ...
+        'tokens', ...
+        'once');
+
+    if isempty(t0Treffer)
+        error('t0 wurde in %s nicht gefunden.',aktuelleDatei);
+    end
+
+    t0 = str2double(t0Treffer{1});
+
+    %% tInc auslesen
+
+    tIncTreffer = regexpi( ...
+        kopfzeile, ...
+        't\s*inc\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*s', ...
+        'tokens', ...
+        'once');
+
+    if isempty(tIncTreffer)
+        error('tInc wurde in %s nicht gefunden.',aktuelleDatei);
+    end
+
+    tInc = str2double(tIncTreffer{1});
+
+    if ~isfinite(t0)
+        error('t0 in %s ist ungültig.',aktuelleDatei);
+    end
+
+    if ~isfinite(tInc) || tInc <= 0
+        error('tInc in %s ist ungültig.',aktuelleDatei);
+    end
+
+    %% Spannungswerte laden
+
+    daten = readmatrix( ...
+        aktuelleDatei, ...
+        'NumHeaderLines',1);
+
+    if isempty(daten)
+        error('In %s wurden keine Daten gefunden.',aktuelleDatei);
+    end
+
+    u = daten(:,1);
+    u = u(isfinite(u));
+
+    if isempty(u)
+        error('In %s wurden keine Spannungswerte gefunden.', ...
+              aktuelleDatei);
+    end
+
+    %% Zeitachse erzeugen
+
+    t = t0 + (0:length(u)-1)'*tInc;
+
+    minimumSpannung = min(u);
+    maximumSpannung = max(u);
+
+    fprintf('t0: %.6f s\n',t0);
+    fprintf('tInc: %.10g s\n',tInc);
+    fprintf('Messwerte: %d\n',length(u));
+    fprintf('Aufnahmedauer: %.3f s\n',t(end)-t(1));
+    fprintf('Minimum: %.3f V\n',minimumSpannung);
+    fprintf('Maximum: %.3f V\n',maximumSpannung);
+
+    %% Automatische Schwelle
+
+    schwelleAktuell = ...
+        minimumSpannung + ...
+        0.5*(maximumSpannung-minimumSpannung);
+
+    fprintf('Automatische Schwelle: %.3f V\n', ...
+            schwelleAktuell);
+
+    %% Negative Impulse erkennen
+
+    % Das Signal fällt beim Beginn eines Impulses
+    % von oberhalb der Schwelle unterhalb der Schwelle.
+
+    idx = find( ...
+        u(1:end-1) > schwelleAktuell & ...
+        u(2:end) <= schwelleAktuell) + 1;
+
+    pulseRoh = t(idx);
+
+    if isempty(pulseRoh)
+        error('In %s wurden keine negativen Impulse erkannt.', ...
+              aktuelleDatei);
+    end
+
+    %% Doppelzählungen entfernen
+
+    pulse = pulseRoh(1);
+
+    for k = 2:length(pulseRoh)
+
+        if pulseRoh(k)-pulse(end) >= mindestAbstand
+            pulse(end+1,1) = pulseRoh(k);
+        end
+    end
+
+    pulse = pulse(:);
+
+    fprintf('Insgesamt erkannte Impulse: %d\n',length(pulse));
+
+    %% Blöcke erkennen
+
+    neuerBlock = [true; diff(pulse) > blockTrennung];
+
+    blockNummer = cumsum(neuerBlock);
+
+    blockGroesse = accumarray(blockNummer,1);
+
+    minimumImpulse = round(0.60*sollImpulse(m));
+
+    echteBloecke = find(blockGroesse >= minimumImpulse);
+
+    fprintf('Erkannte vollständige Blöcke: %d\n', ...
+            length(echteBloecke));
+
+    fprintf('Impulse pro vollständigem Block:\n');
+    disp(blockGroesse(echteBloecke)');
+
+    if length(echteBloecke) < anzahlBloecke
+        error('%s enthält nur %d vollständige Blöcke.', ...
+              aktuelleDatei,length(echteBloecke));
+    end
+
+    % Erste neun vollständige Blöcke
+    echteBloecke = echteBloecke(1:anzahlBloecke);
+
+    %% Werte pro Block
+
+    impulseProBlock = zeros(anzahlBloecke,1);
+    frequenzProBlock = zeros(anzahlBloecke,1);
+    stimDauerProBlock = zeros(anzahlBloecke,1);
+    startProBlock = zeros(anzahlBloecke,1);
+
+    pulseDerBloecke = cell(anzahlBloecke,1);
+
+    for b = 1:anzahlBloecke
+
+        p = pulse(blockNummer == echteBloecke(b));
+
+        pulseDerBloecke{b} = p;
+
+        impulseProBlock(b) = length(p);
+
+        startProBlock(b) = p(1);
+
+        impulsAbstaende = diff(p);
+
+        frequenzProBlock(b) = ...
+            1/median(impulsAbstaende);
+
+        % Dauer vom ersten bis zum letzten Impuls
+        stimDauerProBlock(b) = ...
+            p(end)-p(1);
+    end
+
+    blockImpulse{m} = impulseProBlock;
+
+    % Ersten Blockstart auf 0 setzen
+    startProBlock = ...
+        startProBlock-startProBlock(1);
+
+    zyklusProBlock = diff(startProBlock);
+
+    %% Ideales Szenario
+
+    % Gemessene Stimulationsdauer ist erster bis letzter Impuls.
+    % Daher gibt es bei N Impulsen N-1 Abstände.
+
+    idealStimDauer(m) = ...
+        (sollImpulse(m)-1)/sollFrequenz(m);
+
+    % Für den kompletten Block werden N Pulsperioden
+    % plus die eingestellte Pause verwendet.
+    %
+    % Sweep wird nicht addiert, weil die Sweep-Messung zeigt,
+    % dass Sweep den Blockrhythmus praktisch nicht verändert.
+
+    idealZyklus(m) = ...
+        sollImpulse(m)/sollFrequenz(m) + ...
+        sollPause_s(m);
+
+    idealStart = ...
+        (0:anzahlBloecke-1)'*idealZyklus(m);
+
+    messStarts{m} = startProBlock;
+    idealStarts{m} = idealStart;
+
+    %% Mittelwerte
+
+    mittelImpulse(m) = mean(impulseProBlock);
+    mittelFrequenz(m) = mean(frequenzProBlock);
+    mittelStimDauer(m) = mean(stimDauerProBlock);
+    mittelZyklus(m) = mean(zyklusProBlock);
+
+    %% Fourier-Transformation
+
+    FsFFT = 100;
+    fftFenster = 35;
+    NFFTSignal = round(FsFFT*fftFenster);
+    NFFT = 2^16;
+
+    spektrumSumme = zeros(NFFT,1);
+
+    for b = 1:anzahlBloecke
+
+        p = pulseDerBloecke{b};
+
+        pRelativ = p-p(1);
+
+        impulsSignal = zeros(NFFTSignal,1);
+
+        positionen = round(pRelativ*FsFFT)+1;
+
+        positionen = positionen( ...
+            positionen >= 1 & ...
+            positionen <= NFFTSignal);
+
+        impulsSignal(positionen) = 1;
+
+        spektrumSumme = ...
+            spektrumSumme + ...
+            abs(fft(impulsSignal,NFFT));
+    end
+
+    mittleresSpektrum = ...
+        spektrumSumme/anzahlBloecke;
+
+    frequenzAchse = ...
+        (0:NFFT-1)'*(FsFFT/NFFT);
+
+    suchBereich = ...
+        frequenzAchse >= 4 & ...
+        frequenzAchse <= 5.2;
+
+    fSuche = frequenzAchse(suchBereich);
+    ySuche = mittleresSpektrum(suchBereich);
+
+    [~,peakPosition] = max(ySuche);
+
+    fftFrequenz(m) = fSuche(peakPosition);
+
+    %% Relative Abweichungen vom eigenen Ideal
+
+    abwImpulse(m) = ...
+        abs(mittelImpulse(m)-sollImpulse(m)) ...
+        /sollImpulse(m)*100;
+
+    abwFrequenz(m) = ...
+        abs(mittelFrequenz(m)-sollFrequenz(m)) ...
+        /sollFrequenz(m)*100;
+
+    abwStimDauer(m) = ...
+        abs(mittelStimDauer(m)-idealStimDauer(m)) ...
+        /idealStimDauer(m)*100;
+
+    abwZyklus(m) = ...
+        abs(mittelZyklus(m)-idealZyklus(m)) ...
+        /idealZyklus(m)*100;
+
+    %% Große Messdaten löschen
+
+    clear daten t u pulse pulseRoh idx
+
+end
+
+%% =========================================================
+% 4. WIRKUNG DER PARAMETERÄNDERUNGEN
+% ==========================================================
+
+% Referenz ist Messung 1
+
+%% Frequenzänderung: erwartet -0,1 Hz
+
+erwarteteAenderungFrequenz = ...
+    sollFrequenz(2)-sollFrequenz(1);
+
+gemesseneAenderungFrequenz = ...
+    mittelFrequenz(2)-mittelFrequenz(1);
+
+fehlerFrequenzEffekt = ...
+    abs(gemesseneAenderungFrequenz- ...
+        erwarteteAenderungFrequenz) ...
+    /abs(erwarteteAenderungFrequenz)*100;
+
+%% Mittelungen: erwartet +4 Impulse
+
+erwarteteAenderungImpulse = ...
+    sollImpulse(3)-sollImpulse(1);
+
+gemesseneAenderungImpulse = ...
+    mittelImpulse(3)-mittelImpulse(1);
+
+fehlerMittelungEffekt = ...
+    abs(gemesseneAenderungImpulse- ...
+        erwarteteAenderungImpulse) ...
+    /abs(erwarteteAenderungImpulse)*100;
+
+%% Sweep: erwartet keine Veränderung der Zyklusdauer
+
+erwarteteAenderungSweep = 0;
+
+gemesseneAenderungSweep = ...
+    mittelZyklus(4)-mittelZyklus(1);
+
+% Da der erwartete Unterschied 0 ist,
+% wird durch die Referenzzyklusdauer geteilt.
+
+fehlerSweepEffekt = ...
+    abs(gemesseneAenderungSweep- ...
+        erwarteteAenderungSweep) ...
+    /mittelZyklus(1)*100;
+
+%% Pause: erwartet -20 Sekunden Zyklusdauer
+
+erwarteteAenderungPause = ...
+    sollPause_s(5)-sollPause_s(1);
+
+gemesseneAenderungPause = ...
+    mittelZyklus(5)-mittelZyklus(1);
+
+fehlerPauseEffekt = ...
+    abs(gemesseneAenderungPause- ...
+        erwarteteAenderungPause) ...
+    /abs(erwarteteAenderungPause)*100;
+
+parameterFehler = [
+    fehlerFrequenzEffekt
+    fehlerMittelungEffekt
+    fehlerSweepEffekt
+    fehlerPauseEffekt
+];
+
+parameterNamen = [
+    "Frequenzänderung"
+    "Mittelungsänderung"
+    "Sweepänderung"
+    "Pausenänderung"
+];
+
+%% =========================================================
+% 5. ERGEBNISTABELLE
+% ==========================================================
+
+Ergebnisse = table( ...
+    namen, ...
+    sollImpulse, ...
+    mittelImpulse, ...
+    sollFrequenz, ...
+    mittelFrequenz, ...
+    fftFrequenz, ...
+    idealStimDauer, ...
+    mittelStimDauer, ...
+    idealZyklus, ...
+    mittelZyklus, ...
+    abwImpulse, ...
+    abwFrequenz, ...
+    abwStimDauer, ...
+    abwZyklus, ...
+    'VariableNames',{ ...
+    'Messung', ...
+    'Impulse_Soll', ...
+    'Impulse_Gemessen', ...
+    'Frequenz_Soll_Hz', ...
+    'Frequenz_Zeit_Hz', ...
+    'Frequenz_FFT_Hz', ...
+    'Stimdauer_Ideal_s', ...
+    'Stimdauer_Gemessen_s', ...
+    'Zyklus_Ideal_s', ...
+    'Zyklus_Gemessen_s', ...
+    'Abweichung_Impulse_Prozent', ...
+    'Abweichung_Frequenz_Prozent', ...
+    'Abweichung_Stimdauer_Prozent', ...
+    'Abweichung_Zyklus_Prozent'});
+
+disp(Ergebnisse);
+
+%% =========================================================
+% 6. IMPULSE PRO BLOCK
+% ==========================================================
+
+impulsMatrix = [
+    blockImpulse{1} ...
+    blockImpulse{2} ...
+    blockImpulse{3} ...
+    blockImpulse{4} ...
+    blockImpulse{5}
+];
+
+figure( ...
+    'Name','Impulse pro Block', ...
+    'Position',[100 100 1100 650]);
+
+plot( ...
+    1:anzahlBloecke, ...
+    impulsMatrix, ...
+    'o-', ...
+    'LineWidth',1.5);
+
+xlabel('Block');
+ylabel('Erkannte Impulse');
+title('Tatsächliche Impulszahl pro Block');
+legend(namen,'Location','best');
+xticks(1:anzahlBloecke);
+grid on;
+
+%% =========================================================
+% 7. JEDE MESSUNG GEGEN IHR EIGENES IDEAL
+% ==========================================================
+
+figure( ...
+    'Name','Abweichung vom eigenen Ideal', ...
+    'Position',[100 50 1200 850]);
+
+tiledlayout(3,2);
+
+for m = 1:anzahlMessungen
+
+    nexttile;
+
+    differenz = ...
+        messStarts{m}-idealStarts{m};
+
+    plot( ...
+        1:anzahlBloecke, ...
+        differenz, ...
+        'o-', ...
+        'LineWidth',2, ...
+        'MarkerFaceColor',[0.2 0.5 0.9]);
+
+    hold on;
+    yline(0,'k--','Ideal');
+    hold off;
+
+    xlabel('Block');
+    ylabel('Messung - Ideal [s]');
+    title(namen(m));
+    xticks(1:anzahlBloecke);
+    grid on;
+end
+
+%% =========================================================
+% 8. RELATIVE ABWEICHUNGEN VOM EIGENEN IDEAL
+% ==========================================================
+
+relativeAbweichungen = [
+    abwImpulse ...
+    abwFrequenz ...
+    abwStimDauer ...
+    abwZyklus
+];
+
+figure( ...
+    'Name','Relative Abweichungen', ...
+    'Position',[100 100 1200 650]);
+
+bar(relativeAbweichungen,'grouped');
+
+xticks(1:anzahlMessungen);
+xticklabels(namen);
+xtickangle(20);
+
+ylabel('Relative Abweichung [%]');
+title('Abweichung jeder Messung von ihrem eigenen Ideal');
+
+legend( ...
+    'Impulszahl', ...
+    'Frequenz', ...
+    'Stimulationsdauer', ...
+    'Zyklusdauer', ...
+    'Location','best');
+
+grid on;
+
+%% =========================================================
+% 9. WELCHE PARAMETERÄNDERUNG FUNKTIONIERT AM SCHLECHTESTEN?
+% ==========================================================
+
+figure( ...
+    'Name','Wirkung der Parameteränderungen', ...
+    'Position',[150 150 1000 600]);
+
+bar(parameterFehler);
+
+xticks(1:4);
+xticklabels(parameterNamen);
+xtickangle(15);
+
+ylabel('Abweichung von der erwarteten Wirkung [%]');
+title('Welche Parameteränderung verhält sich unerwartet?');
+
+grid on;
+
+%% =========================================================
+% 10. TEXTAUSGABE
+% ==========================================================
+
+fprintf('\n========================================\n');
+fprintf('WIRKUNG DER PARAMETERÄNDERUNGEN\n');
+fprintf('========================================\n');
+
+fprintf('\nFrequenzänderung:\n');
+fprintf('Erwartet: %.4f Hz\n',erwarteteAenderungFrequenz);
+fprintf('Gemessen: %.4f Hz\n',gemesseneAenderungFrequenz);
+fprintf('Abweichung: %.2f %%\n',fehlerFrequenzEffekt);
+
+fprintf('\nMittelungsänderung:\n');
+fprintf('Erwartet: %.2f Impulse\n',erwarteteAenderungImpulse);
+fprintf('Gemessen: %.2f Impulse\n',gemesseneAenderungImpulse);
+fprintf('Abweichung: %.2f %%\n',fehlerMittelungEffekt);
+
+fprintf('\nSweepänderung:\n');
+fprintf('Erwartet: %.4f s Zyklusänderung\n', ...
+        erwarteteAenderungSweep);
+fprintf('Gemessen: %.4f s Zyklusänderung\n', ...
+        gemesseneAenderungSweep);
+fprintf('Abweichung relativ zum Referenzzyklus: %.4f %%\n', ...
+        fehlerSweepEffekt);
+
+fprintf('\nPausenänderung:\n');
+fprintf('Erwartet: %.4f s\n',erwarteteAenderungPause);
+fprintf('Gemessen: %.4f s\n',gemesseneAenderungPause);
+fprintf('Abweichung: %.2f %%\n',fehlerPauseEffekt);
+
+fprintf('\n========================================\n');
+fprintf('FFT-FREQUENZEN\n');
+fprintf('========================================\n');
+
+for m = 1:anzahlMessungen
+
+    fprintf('%s: %.4f Hz\n', ...
+        char(namen(m)), ...
+        fftFrequenz(m));
+end
+
+%% Größte unerwartete Parameterwirkung
+
+[groessterFehler,position] = max(parameterFehler);
+
+fprintf('\n========================================\n');
+fprintf('GRÖSSTE UNERWARTETE PARAMETERWIRKUNG\n');
+fprintf('========================================\n');
+
+fprintf('Parameter: %s\n',char(parameterNamen(position)));
+fprintf('Relative Abweichung: %.2f %%\n',groessterFehler);
