@@ -1,0 +1,119 @@
+
+========================================
+Messung: Referenz
+Datei: normal0.csv
+========================================
+Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
+t0: -123 s
+tInc: 1e-05 s
+Messwerte: 52300000
+Aufnahmedauer: 523.000 s
+Minimum: -21.476 V
+Maximum: 1.263 V
+Automatische Schwelle: -10.106 V
+Insgesamt erkannte Impulse: 1240
+Erkannte vollständige Blöcke: 9
+Impulse pro vollständigem Block:
+   137   137   138   138   138   138   138   138   138
+
+
+========================================
+Messung: Frequenz 4,6 Hz
+Datei: frequenz0.csv
+========================================
+Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
+t0: -123 s
+tInc: 1e-05 s
+Messwerte: 66300000
+Aufnahmedauer: 663.000 s
+Minimum: -21.476 V
+Maximum: 0.842 V
+Automatische Schwelle: -10.317 V
+Insgesamt erkannte Impulse: 1509
+Erkannte vollständige Blöcke: 11
+Impulse pro vollständigem Block:
+   137   138   137   137   138   137   137   137   137   137   137
+
+
+========================================
+Messung: 141 Mittelungen
+Datei: mittlung0.csv
+========================================
+Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
+t0: -123 s
+tInc: 1e-05 s
+Messwerte: 62600000
+Aufnahmedauer: 626.000 s
+Minimum: -21.476 V
+Maximum: 1.263 V
+Automatische Schwelle: -10.106 V
+Insgesamt erkannte Impulse: 1477
+Erkannte vollständige Blöcke: 10
+Impulse pro vollständigem Block:
+   141   142   142   141   142   142   141   141   141   141
+
+
+========================================
+Messung: Sweep 40 ms
+Datei: sweep0.csv
+========================================
+Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
+t0: -123 s
+tInc: 1e-05 s
+Messwerte: 55400000
+Aufnahmedauer: 554.000 s
+Minimum: -21.476 V
+Maximum: 0.842 V
+Automatische Schwelle: -10.317 V
+Insgesamt erkannte Impulse: 1253
+Erkannte vollständige Blöcke: 9
+Impulse pro vollständigem Block:
+   137   138   137   137   138   138   137   138   137
+
+
+========================================
+Messung: Pause 10 s
+Datei: pause0.csv
+========================================
+Kopfzeile: CH1(V),t0 = -123s, tInc = 1e-05s,
+t0: -123 s
+tInc: 1e-05 s
+Messwerte: 39900000
+Aufnahmedauer: 399.000 s
+Minimum: -21.476 V
+Maximum: 1.263 V
+Automatische Schwelle: -10.106 V
+Insgesamt erkannte Impulse: 1376
+Erkannte vollständige Blöcke: 10
+Impulse pro vollständigem Block:
+   138   137   137   137   138   138   138   138   138   137
+
+         Messung         Impulse_Soll    Impulse_Gemessen    Frequenz_Soll_Hz    Frequenz_aus_Zeit_Hz    Frequenz_FFT_Hz    Stimulationsdauer_s    Zyklusdauer_s    Abweichung_Impulse_Prozent    Abweichung_Frequenz_Prozent    Abweichung_Stimdauer_Prozent    Abweichung_Zyklus_Prozent    Gesamtabweichung_Prozent
+    _________________    ____________    ________________    ________________    ____________________    _______________    ___________________    _____________    __________________________    ___________________________    ____________________________    _________________________    ________________________
+
+    "Referenz"               137              137.78               4.7                  4.6083               4.6066               29.685               59.99                 0.56772                        1.9512                          2.5873                        1.6507                       1.6892         
+    "Frequenz 4,6 Hz"        137              137.22               4.6                  4.5045               4.5013               30.257              60.678                 0.16221                         2.076                          2.3383                        1.7308                       1.5768         
+    "141 Mittelungen"        141              141.44               4.7                  4.6083               4.6066               30.483              60.961                 0.31521                        1.9512                          2.3365                        1.8269                       1.6075         
+    "Sweep 40 ms"            137              137.44               4.7                  4.6083               4.6066                29.61              59.982                 0.32441                        1.9512                          2.3275                         1.705                        1.577         
+    "Pause 10 s"             137              137.67               4.7                  4.6083               4.6066               29.661              39.999                 0.48662                        1.9512                          2.5039                        2.5195                       1.8653         
+
+
+========================================
+GRÖSSTE RELATIVE GESAMTABWEICHUNG
+========================================
+Messung: Pause 10 s
+Gesamtabweichung: 1.87 %
+
+Teilabweichungen:
+Impulszahl:        0.49 %
+Frequenz:          1.95 %
+Stimulationsdauer: 2.50 %
+Zyklusdauer:       2.52 %
+
+FFT-Frequenzen:
+Referenz: 4.6066 Hz
+Frequenz 4,6 Hz: 4.5013 Hz
+141 Mittelungen: 4.6066 Hz
+Sweep 40 ms: 4.6066 Hz
+Pause 10 s: 4.6066 Hz
+>> 
