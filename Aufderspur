@@ -75,10 +75,18 @@ for m = 1:anzahlMessungen
         error('Die Datei %s wurde nicht gefunden.',dateien(m));
     end
 
-    daten = readmatrix(dateien(m));
+    % CSV-Trennzeichen automatisch erkennen
+optionen = detectImportOptions(dateien(m));
+T = readtable(dateien(m),optionen);
 
-    t = daten(:,1);
-    u = daten(:,2);
+fprintf('Erkannte Spalten in %s: %d\n',dateien(m),width(T));
+
+if width(T) < 2
+    error('%s wurde nur als eine Spalte erkannt.',dateien(m));
+end
+
+t = T{:,1};
+u = T{:,2};
 
     % Ungültige Werte entfernen
     gueltig = isfinite(t) & isfinite(u);
