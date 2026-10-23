@@ -3,10 +3,9 @@ clc;
 close all;
 
 %% =========================================================
-% 1. EINSTELLUNGEN
+% EINSTELLUNGEN
 % ==========================================================
 
-% Die CSV-Dateien müssen im gleichen Ordner wie das Skript liegen
 dateien = [
     "normal0.csv"
     "frequenz0.csv"
@@ -23,11 +22,12 @@ namen = [
     "Pause 10 s"
 ];
 
-% Eingestellte Sollwerte
+% Sollwerte der fünf Messungen
 sollFrequenz = [4.7; 4.6; 4.7; 4.7; 4.7];
 sollImpulse  = [137; 137; 141; 137; 137];
 
-% Ändern, falls der normale Sweep nicht 80 ms betrug
+% Falls dein normaler Sweep nicht 80 ms war:
+% diese vier 80er-Werte ändern
 sollSweep_ms = [80; 80; 80; 40; 80];
 
 sollPause_s = [30; 30; 30; 30; 10];
@@ -35,13 +35,13 @@ sollPause_s = [30; 30; 30; 30; 10];
 anzahlMessungen = 5;
 anzahlBloecke = 9;
 
-% Einstellungen für die Impulserkennung
+% Impulserkennung
 schwelle = 5;
 mindestAbstand = 0.15;
 blockTrennung = 5;
 
 %% =========================================================
-% 2. SPEICHER FÜR DIE ERGEBNISSE
+% ERGEBNISVARIABLEN
 % ==========================================================
 
 mittelImpulse = zeros(anzahlMessungen,1);
@@ -58,15 +58,16 @@ gesamtAbweichung = zeros(anzahlMessungen,1);
 
 messStarts = cell(anzahlMessungen,1);
 idealStarts = cell(anzahlMessungen,1);
+blockImpulse = cell(anzahlMessungen,1);
 
 %% =========================================================
-% 3. ALLE FÜNF MESSUNGEN AUSWERTEN
+% ALLE FÜNF DATEIEN AUSWERTEN
 % ==========================================================
 
 for m = 1:anzahlMessungen
 
     fprintf('\n========================================\n');
-    fprintf('Auswertung: %s\n',namen(m));
+    fprintf('Messung: %s\n',namen(m));
     fprintf('Datei: %s\n',dateien(m));
     fprintf('========================================\n');
 
@@ -74,98 +75,18 @@ for m = 1:anzahlMessungen
         error('Die Datei %s wurde nicht gefunden.',dateien(m));
     end
 
-    %% -----------------------------------------------------
-    % tInc in den Kopfzeilen suchen
-    % ------------------------------------------------------
+    %% Rigol-Memory-CSV einlesen
 
-    fid = fopen(dateien(m),'r');
+    [t,u,t0,tInc] = rigolDateiEinlesen(dateien(m));
 
-    if fid == -1
-        error('Die Datei %s konnte nicht geöffnet werden.',dateien(m));
-    end
+    fprintf('Startzeit t0: %.6f s\n',t0);
+    fprintf('Zeitabstand tInc: %.10g s\n',tInc);
+    fprintf('Messwerte: %d\n',length(u));
+    fprintf('Aufnahmedauer: %.3f s\n',t(end)-t(1));
+    fprintf('Spannungsbereich: %.3f bis %.3f V\n',min(u),max(u));
 
-    TInc = NaN;
+    %% Impulse über die 5-V-Schwelle erkennen
 
-    % Die ersten 150 Zeilen durchsuchen
-    for zeile = 1:150
-
-        textZeile = fgetl(fid);
-
-        if ~ischar(textZeile)
-            break;
-        end
-
-        % Erkennt tInc, TInc, T Inc und t inc
-        if ~isempty(regexpi(textZeile,'t\s*inc','once'))
-
-            gefundeneZahlen = regexp( ...
-                textZeile, ...
-                '[+-]?\d*\.?\d+(?:[Ee][+-]?\d+)?', ...
-                'match');
-
-            if ~isempty(gefundeneZahlen)
-                TInc = str2double(gefundeneZahlen{end});
-            end
-        end
-    end
-
-    fclose(fid);
-
-    %% -----------------------------------------------------
-    % Zahlen aus der CSV laden
-    % ------------------------------------------------------
-
-    daten = readmatrix(dateien(m));
-
-    % Prüfen, ob eine echte zweite Spalte vorhanden ist
-    zweiteSpalteVorhanden = ...
-        size(daten,2) >= 2 && ...
-        sum(isfinite(daten(:,2))) > 100;
-
-    if zweiteSpalteVorhanden
-
-        % Normale Display-CSV:
-        % Spalte 1 = Zeit
-        % Spalte 2 = Spannung
-        t = daten(:,1);
-        u = daten(:,2);
-
-        gueltig = isfinite(t) & isfinite(u);
-        t = t(gueltig);
-        u = u(gueltig);
-
-        fprintf('Format: Display-CSV mit Zeitspalte\n');
-
-    else
-
-        % Memory-CSV:
-        % Spalte 1 = Spannung
-        u = daten(:,1);
-        u = u(isfinite(u));
-
-        if isnan(TInc)
-            error('tInc wurde in %s nicht gefunden.',dateien(m));
-        end
-
-        % Zeitachse aus tInc erzeugen
-        t = (0:length(u)-1)'*TInc;
-
-        fprintf('Format: Memory-CSV\n');
-        fprintf('tInc: %.10g s\n',TInc);
-        fprintf('Messwerte: %d\n',length(u));
-    end
-
-    % Daten zeitlich sortieren
-    [t,reihenfolge] = sort(t);
-    u = u(reihenfolge);
-
-    fprintf('Errechnete Aufnahmedauer: %.3f s\n',t(end)-t(1));
-
-    %% -----------------------------------------------------
-    % Impulse erkennen
-    % ------------------------------------------------------
-
-    % Übergang von unter 5 V auf über 5 V
     idx = find( ...
         u(1:end-1) <= schwelle & ...
         u(2:end) > schwelle) + 1;
@@ -173,10 +94,13 @@ for m = 1:anzahlMessungen
     pulseRoh = t(idx);
 
     if isempty(pulseRoh)
-        error('In %s wurden keine Impulse über 5 V erkannt.',dateien(m));
+        error(['In %s wurden keine Impulse über %.1f V erkannt. ' ...
+               'Gemessener Maximalwert: %.3f V'], ...
+               dateien(m),schwelle,max(u));
     end
 
-    % Mögliche Doppelzählungen entfernen
+    %% Doppelzählungen entfernen
+
     pulse = pulseRoh(1);
 
     for k = 2:length(pulseRoh)
@@ -190,39 +114,38 @@ for m = 1:anzahlMessungen
 
     fprintf('Insgesamt erkannte Impulse: %d\n',length(pulse));
 
-    %% -----------------------------------------------------
-    % Impulse in Blöcke aufteilen
-    % ------------------------------------------------------
+    %% Impulse in Blöcke aufteilen
 
     neuerBlock = [true; diff(pulse) > blockTrennung];
     blockNummer = cumsum(neuerBlock);
     blockGroesse = accumarray(blockNummer,1);
 
-    % Block muss mindestens 60 % der erwarteten Impulse besitzen
-    minimumImpulse = round(0.6*sollImpulse(m));
+    % Ein vollständiger Block braucht mindestens 60 % der Sollimpulse
+    minimumImpulse = round(0.60*sollImpulse(m));
 
     echteBloecke = find(blockGroesse >= minimumImpulse);
 
-    fprintf('Erkannte vollständige Blöcke: %d\n',length(echteBloecke));
-    fprintf('Impulse in diesen Blöcken:\n');
+    fprintf('Vollständige Blöcke: %d\n',length(echteBloecke));
+    fprintf('Impulse pro vollständigem Block:\n');
     disp(blockGroesse(echteBloecke)');
 
     if length(echteBloecke) < anzahlBloecke
-        error('%s enthält nur %d vollständige Blöcke.', ...
-              dateien(m),length(echteBloecke));
+
+        error([ ...
+            '%s enthält nur %d vollständige Blöcke. ' ...
+            'Für die Auswertung werden 9 benötigt.'], ...
+            dateien(m),length(echteBloecke));
     end
 
     % Nur die ersten neun vollständigen Blöcke
     echteBloecke = echteBloecke(1:anzahlBloecke);
 
-    %% -----------------------------------------------------
-    % Kennwerte für jeden Block berechnen
-    % ------------------------------------------------------
+    %% Werte der neun Blöcke bestimmen
 
     impulseProBlock = zeros(anzahlBloecke,1);
     frequenzProBlock = zeros(anzahlBloecke,1);
     stimDauerProBlock = zeros(anzahlBloecke,1);
-    blockStart = zeros(anzahlBloecke,1);
+    startProBlock = zeros(anzahlBloecke,1);
 
     pulseDerBloecke = cell(anzahlBloecke,1);
 
@@ -232,32 +155,29 @@ for m = 1:anzahlMessungen
         pulseDerBloecke{b} = p;
 
         impulseProBlock(b) = length(p);
-        blockStart(b) = p(1);
+        startProBlock(b) = p(1);
 
-        impulsAbstaende = diff(p);
+        abstaende = diff(p);
 
-        % Frequenz aus dem typischen Impulsabstand
-        frequenzProBlock(b) = 1/median(impulsAbstaende);
+        frequenzProBlock(b) = 1/median(abstaende);
 
-        % Dauer vom ersten bis zum letzten Impuls
+        % Zeit vom ersten bis zum letzten Impuls
         stimDauerProBlock(b) = p(end)-p(1);
     end
 
-    % Ersten Block auf Zeit 0 setzen
-    blockStart = blockStart-blockStart(1);
+    blockImpulse{m} = impulseProBlock;
 
-    % Zeit zwischen zwei Blockstarts
-    zyklusProBlock = diff(blockStart);
+    % Ersten Blockstart auf 0 Sekunden setzen
+    startProBlock = startProBlock-startProBlock(1);
 
-    %% -----------------------------------------------------
-    % Ideales Szenario dieser Messung
-    % ------------------------------------------------------
+    % Abstände zwischen den Blockstarts
+    zyklusProBlock = diff(startProBlock);
 
-    % Dauer vom ersten bis zum letzten Impuls
+    %% Zugehöriges ideales Szenario
+
     idealeStimDauer = ...
         (sollImpulse(m)-1)/sollFrequenz(m);
 
-    % Ideale Zeit von einem Blockstart zum nächsten
     idealerZyklus = ...
         idealeStimDauer + ...
         sollSweep_ms(m)/1000 + ...
@@ -265,21 +185,20 @@ for m = 1:anzahlMessungen
 
     idealStart = (0:anzahlBloecke-1)'*idealerZyklus;
 
-    messStarts{m} = blockStart;
+    messStarts{m} = startProBlock;
     idealStarts{m} = idealStart;
 
-    %% -----------------------------------------------------
-    % Mittelwerte
-    % ------------------------------------------------------
+    %% Mittelwerte
 
     mittelImpulse(m) = mean(impulseProBlock);
     mittelFrequenz(m) = mean(frequenzProBlock);
     mittelStimDauer(m) = mean(stimDauerProBlock);
     mittelZyklus(m) = mean(zyklusProBlock);
 
-    %% -----------------------------------------------------
-    % Fourier-Transformation der Einzelimpulse
-    % ------------------------------------------------------
+    %% Fourier-Transformation
+
+    % Aus den erkannten Impulszeitpunkten wird ein sauberes
+    % gleichmäßig abgetastetes Signal erzeugt.
 
     FsFFT = 100;
     fftFenster = 35;
@@ -291,8 +210,6 @@ for m = 1:anzahlMessungen
     for b = 1:anzahlBloecke
 
         p = pulseDerBloecke{b};
-
-        % Erster Impuls wird auf t = 0 gesetzt
         pRelativ = p-p(1);
 
         impulsSignal = zeros(N,1);
@@ -303,14 +220,13 @@ for m = 1:anzahlMessungen
 
         impulsSignal(positionen) = 1;
 
-        spektrum = abs(fft(impulsSignal,NFFT));
-        spektrumSumme = spektrumSumme+spektrum;
+        spektrumSumme = ...
+            spektrumSumme + abs(fft(impulsSignal,NFFT));
     end
 
     mittleresSpektrum = spektrumSumme/anzahlBloecke;
     frequenzAchse = (0:NFFT-1)'*(FsFFT/NFFT);
 
-    % Frequenz nur zwischen 4 und 5,2 Hz suchen
     suchBereich = ...
         frequenzAchse >= 4 & ...
         frequenzAchse <= 5.2;
@@ -321,9 +237,7 @@ for m = 1:anzahlMessungen
     [~,peakPosition] = max(ySuche);
     fftFrequenz(m) = fSuche(peakPosition);
 
-    %% -----------------------------------------------------
-    % Relative Abweichungen
-    % ------------------------------------------------------
+    %% Relative Abweichungen
 
     abwImpulse(m) = ...
         abs(mittelImpulse(m)-sollImpulse(m)) ...
@@ -341,7 +255,6 @@ for m = 1:anzahlMessungen
         abs(mittelZyklus(m)-idealerZyklus) ...
         /idealerZyklus*100;
 
-    % Durchschnitt der vier Teilabweichungen
     gesamtAbweichung(m) = mean([
         abwImpulse(m)
         abwFrequenz(m)
@@ -349,10 +262,14 @@ for m = 1:anzahlMessungen
         abwZyklus(m)
     ]);
 
+    %% Speicher für nächste große Datei freigeben
+
+    clear daten t u pulseRoh pulse
+
 end
 
 %% =========================================================
-% 4. ERGEBNISTABELLE
+% ERGEBNISTABELLE
 % ==========================================================
 
 Ergebnisse = table( ...
@@ -387,12 +304,38 @@ Ergebnisse = table( ...
 disp(Ergebnisse);
 
 %% =========================================================
-% 5. FÜNF GRAPHEN:
+% GRAPH 1:
+% IMPULSZAHLEN DER NEUN BLÖCKE
+% ==========================================================
+
+figure( ...
+    'Name','Impulse pro Block', ...
+    'Position',[100 100 1100 650]);
+
+impulsMatrix = [
+    blockImpulse{1} ...
+    blockImpulse{2} ...
+    blockImpulse{3} ...
+    blockImpulse{4} ...
+    blockImpulse{5}
+];
+
+plot(1:anzahlBloecke,impulsMatrix,'o-','LineWidth',1.5);
+
+xlabel('Block');
+ylabel('Erkannte Impulse');
+title('Tatsächliche Impulszahl in den neun Blöcken');
+legend(namen,'Location','best');
+xticks(1:anzahlBloecke);
+grid on;
+
+%% =========================================================
+% GRAPHS 2 BIS 6:
 % JEDE MESSUNG GEGEN IHR EIGENES IDEAL
 % ==========================================================
 
 figure( ...
-    'Name','Messung gegen jeweiliges Ideal', ...
+    'Name','Abweichung vom jeweiligen Ideal', ...
     'Position',[100 50 1200 850]);
 
 tiledlayout(3,2);
@@ -401,8 +344,6 @@ for m = 1:anzahlMessungen
 
     nexttile;
 
-    % Positiv = gemessener Block beginnt zu spät
-    % Negativ = gemessener Block beginnt zu früh
     differenz = messStarts{m}-idealStarts{m};
 
     plot( ...
@@ -413,9 +354,7 @@ for m = 1:anzahlMessungen
         'MarkerFaceColor',[0.2 0.5 0.9]);
 
     hold on;
-
-    yline(0,'k--','Idealer Start');
-
+    yline(0,'k--','Ideal');
     hold off;
 
     xlabel('Block');
@@ -427,7 +366,8 @@ for m = 1:anzahlMessungen
 end
 
 %% =========================================================
-% 6. ALLE RELATIVEN ABWEICHUNGEN VERGLEICHEN
+% LETZTER GRAPH:
+% RELATIVE ABWEICHUNGEN ALLER MESSUNGEN
 % ==========================================================
 
 teilAbweichungen = [
@@ -445,7 +385,6 @@ bar(teilAbweichungen,'grouped');
 
 hold on;
 
-% Schwarzer Punkt = mittlere Gesamtabweichung
 plot( ...
     1:anzahlMessungen, ...
     gesamtAbweichung, ...
@@ -473,7 +412,7 @@ legend( ...
 grid on;
 
 %% =========================================================
-% 7. GRÖSSTE ABWEICHUNG AUSGEBEN
+% GRÖSSTE ABWEICHUNG AUSGEBEN
 % ==========================================================
 
 [groessteAbweichung,position] = max(gesamtAbweichung);
@@ -491,10 +430,84 @@ fprintf('Frequenz:          %.2f %%\n',abwFrequenz(position));
 fprintf('Stimulationsdauer: %.2f %%\n',abwStimDauer(position));
 fprintf('Zyklusdauer:       %.2f %%\n',abwZyklus(position));
 
-fprintf('\n========================================\n');
-fprintf('FREQUENZEN AUS DER FFT\n');
-fprintf('========================================\n');
+fprintf('\nFFT-Frequenzen:\n');
 
 for m = 1:anzahlMessungen
     fprintf('%s: %.4f Hz\n',namen(m),fftFrequenz(m));
+end
+
+%% =========================================================
+% FUNKTION ZUM EINLESEN DER RIGOL-MEMORY-CSV
+% Diese Funktion muss ganz unten im Skript bleiben.
+% ==========================================================
+
+function [t,u,t0,tInc] = rigolDateiEinlesen(dateiname)
+
+    % Erste Zeile öffnen
+    fid = fopen(dateiname,'r');
+
+    if fid == -1
+        error('Datei %s konnte nicht geöffnet werden.',dateiname);
+    end
+
+    kopfzeile = fgetl(fid);
+    fclose(fid);
+
+    if ~ischar(kopfzeile)
+        error('Die Datei %s ist leer.',dateiname);
+    end
+
+    % t0 aus dieser Form lesen:
+    % t0 = -123s
+    t0Treffer = regexp( ...
+        kopfzeile, ...
+        't0\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*s', ...
+        'tokens', ...
+        'once', ...
+        'ignorecase');
+
+    % tInc aus dieser Form lesen:
+    % tInc = 1e-05s
+    tIncTreffer = regexp( ...
+        kopfzeile, ...
+        't\s*inc\s*=\s*([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*s', ...
+        'tokens', ...
+        'once', ...
+        'ignorecase');
+
+    if isempty(t0Treffer)
+        error('t0 wurde in der ersten Zeile von %s nicht gefunden.', ...
+              dateiname);
+    end
+
+    if isempty(tIncTreffer)
+        error('tInc wurde in der ersten Zeile von %s nicht gefunden.', ...
+              dateiname);
+    end
+
+    t0 = str2double(t0Treffer{1});
+    tInc = str2double(tIncTreffer{1});
+
+    if ~isfinite(t0) || ~isfinite(tInc) || tInc <= 0
+        error('t0 oder tInc in %s ist ungültig.',dateiname);
+    end
+
+    % Ab Zeile 2 nur noch Zahlen laden
+    daten = readmatrix(dateiname,'NumHeaderLines',1);
+
+    if isempty(daten)
+        error('Keine Messwerte in %s gefunden.',dateiname);
+    end
+
+    % Nur die erste Spalte enthält die Spannungswerte
+    u = daten(:,1);
+    u = u(isfinite(u));
+
+    if isempty(u)
+        error('Keine gültigen Spannungswerte in %s gefunden.',dateiname);
+    end
+
+    % Zeitachse aus t0 und tInc rekonstruieren
+    t = t0 + (0:length(u)-1)'*tInc;
+
 end
