@@ -180,8 +180,8 @@ for m = 1:anzahlMessungen
     %% Impulse erkennen
 
     idx = find( ...
-        u(1:end-1) <= schwelleAktuell & ...
-        u(2:end) > schwelleAktuell) + 1;
+        u(1:end-1) > schwelleAktuell & ...
+        u(2:end) <= schwelleAktuell) + 1;
 
     pulseRoh = t(idx);
 
