@@ -3,54 +3,90 @@ clc;
 close all;
 
 %% =========================================================
-% EINSTELLUNGEN
+% SOLLWERTE UND GRENZWERTE
 % ==========================================================
 
-anzahlSollBloecke = 9;
+anzahlMessungenSoll = 5;
+anzahlBloeckeSoll = 9;
 
-stimSoll   = 30;          % gewünschte Stimulationsdauer
-pauseSoll  = 30;          % gewünschte Pause
-zyklusSoll = 60;          % 30 s Stimulation + 30 s Pause
+frequenzSoll = 4.7;
+impulseSoll = 137;
 
-minImpulsabstand = 0.10;  % verhindert doppelte Zählungen
-blockGrenze = 2;          % Abstand über 2 s bedeutet neuer Block
+stimSoll = 30;
+pauseSoll = 30;
+zyklusSoll = 60;
+
+minImpulsabstand = 0.10;
+blockGrenze = 2;
+
+% Vorläufige Bewertungskriterien
+grenzeFrequenzProzent = 2;
+grenzeStimProzent = 2;
+grenzePauseProzent = 2;
+grenzeEndfehlerSekunden = 2;
 
 %% =========================================================
-% CSV-DATEIEN AUSWÄHLEN
+% FÜNF CSV-DATEIEN AUSWÄHLEN
 % ==========================================================
 
 [dateien, ordner] = uigetfile( ...
     '*.csv', ...
-    'Rigol-CSV-Dateien auswählen', ...
+    'Die fünf Wiederholungsmessungen auswählen', ...
     'MultiSelect', 'on');
 
-if isequal(dateien, 0)
-    error('Es wurde keine CSV-Datei ausgewählt.');
+if isequal(dateien,0)
+    error('Es wurden keine Dateien ausgewählt.');
 end
 
-% Falls nur eine Datei ausgewählt wurde
 if ischar(dateien)
     dateien = {dateien};
 end
 
+anzahlDateien = numel(dateien);
+
+if anzahlDateien ~= anzahlMessungenSoll
+    warning(['Du hast %d Dateien ausgewählt. Vorgesehen sind ' ...
+        'fünf Wiederholungsmessungen.'], anzahlDateien);
+end
+
+messungsNamen = erase(string(dateien(:)), ".csv");
+
 %% =========================================================
-% ALLE AUSGEWÄHLTEN DATEIEN AUSWERTEN
+% SPEICHER FÜR GEMEINSAME AUSWERTUNG
 % ==========================================================
 
-for dateiNummer = 1:numel(dateien)
+stimMatrix = nan(anzahlDateien, anzahlBloeckeSoll);
+pauseMatrix = nan(anzahlDateien, anzahlBloeckeSoll);
+zyklusMatrix = nan(anzahlDateien, anzahlBloeckeSoll);
+driftMatrix = nan(anzahlDateien, anzahlBloeckeSoll);
+impulsMatrix = nan(anzahlDateien, anzahlBloeckeSoll);
 
-    dateiname = fullfile(ordner, dateien{dateiNummer});
+frequenzMessung = nan(anzahlDateien,1);
+medianImpulsabstand = nan(anzahlDateien,1);
+medianImpulsbreite_ms = nan(anzahlDateien,1);
 
-    fprintf('\n\n');
+vollstaendigeImpulse = nan(anzahlDateien,1);
+erkannteImpulseGesamt = nan(anzahlDateien,1);
+anteilVollstaendigeImpulse = nan(anzahlDateien,1);
+
+endFehler = nan(anzahlDateien,1);
+anzahlGefundeneBloecke = nan(anzahlDateien,1);
+
+%% =========================================================
+% JEDE DATEI EINLESEN UND AUSWERTEN
+% ==========================================================
+
+for m = 1:anzahlDateien
+
+    dateiname = fullfile(ordner, dateien{m});
+
+    fprintf('\n============================================\n');
+    fprintf('MESSUNG %d: %s\n', m, dateien{m});
     fprintf('============================================\n');
-    fprintf('AUSWERTUNG: %s\n', dateien{dateiNummer});
-    fprintf('============================================\n');
 
-    %% =====================================================
-    % RIGOL-CSV EINLESEN
-    % ======================================================
+    %% Datei öffnen
 
-    fid = fopen(dateiname, 'r');
+    fid = fopen(dateiname,'r');
 
     if fid == -1
         warning('Datei konnte nicht geöffnet werden.');
@@ -59,14 +95,12 @@ for dateiNummer = 1:numel(dateien)
 
     kopfzeile = fgetl(fid);
 
-    % tInc aus Kopfzeile lesen
     tIncTreffer = regexp( ...
         kopfzeile, ...
         'tInc\s*=\s*([-+0-9.eE]+)\s*s', ...
         'tokens', ...
         'once');
 
-    % t0 aus Kopfzeile lesen
     t0Treffer = regexp( ...
         kopfzeile, ...
         't0\s*=\s*([-+0-9.eE]+)\s*s', ...
@@ -75,8 +109,7 @@ for dateiNummer = 1:numel(dateien)
 
     if isempty(tIncTreffer)
         fclose(fid);
-        warning('tInc wurde in %s nicht gefunden.', ...
-            dateien{dateiNummer});
+        warning('tInc wurde nicht gefunden.');
         continue;
     end
 
@@ -88,7 +121,6 @@ for dateiNummer = 1:numel(dateien)
         t0 = str2double(t0Treffer{1});
     end
 
-    % Erste Zahl jeder Zeile einlesen
     daten = textscan( ...
         fid, ...
         '%f%*[^\n]', ...
@@ -101,124 +133,88 @@ for dateiNummer = 1:numel(dateien)
     u = u(isfinite(u));
 
     if isempty(u)
-        warning('In der Datei wurden keine Messwerte gefunden.');
+        warning('Keine Messwerte gefunden.');
         continue;
     end
 
-    % Zeitachse automatisch erzeugen
     t = t0 + (0:numel(u)-1)' .* tInc;
 
-    fprintf('Kopfzeile: %s\n', kopfzeile);
     fprintf('Messwerte: %d\n', numel(u));
-    fprintf('tInc: %.10f s\n', tInc);
     fprintf('Aufnahmedauer: %.3f s\n', t(end)-t(1));
-    fprintf('Minimum: %.3f V\n', min(u));
-    fprintf('Maximum: %.3f V\n', max(u));
 
-    %% =====================================================
-    % SCHWELLE AUTOMATISCH BESTIMMEN
-    % ======================================================
+    %% Automatische Schwelle
 
     grundniveau = median(u);
     minimum = min(u);
     maximum = max(u);
 
-    abstandNachOben = maximum - grundniveau;
-    abstandNachUnten = grundniveau - minimum;
+    if maximum-grundniveau >= grundniveau-minimum
 
-    % Automatisch erkennen, ob Impulse nach oben oder unten gehen
-    if abstandNachOben >= abstandNachUnten
-
-        positiveImpulse = true;
-        schwelle = (grundniveau + maximum) / 2;
-
+        schwelle = (grundniveau+maximum)/2;
         impulsMaske = u > schwelle;
 
     else
 
-        positiveImpulse = false;
-        schwelle = (grundniveau + minimum) / 2;
-
+        schwelle = (grundniveau+minimum)/2;
         impulsMaske = u < schwelle;
 
     end
 
-    fprintf('Grundniveau: %.3f V\n', grundniveau);
     fprintf('Automatische Schwelle: %.3f V\n', schwelle);
 
-    if positiveImpulse
-        fprintf('Impulsrichtung: nach oben\n');
-    else
-        fprintf('Impulsrichtung: nach unten\n');
-    end
+    %% Impulsanfänge und Impulsenden
 
-    %% =====================================================
-    % STEIGENDE BZW. BEGINNENDE FLANKEN ERKENNEN
-    % ======================================================
-
-    impulsStartIndex = find( ...
+    startIndex = find( ...
         ~impulsMaske(1:end-1) & impulsMaske(2:end)) + 1;
 
-    impulsEndIndex = find( ...
+    endeIndex = find( ...
         impulsMaske(1:end-1) & ~impulsMaske(2:end)) + 1;
 
-    impulsStart = t(impulsStartIndex);
+    startZeit = t(startIndex);
 
-    if isempty(impulsStart)
-        warning('Es wurden keine Impulse erkannt.');
+    if isempty(startZeit)
+        warning('Keine Impulse erkannt.');
         continue;
     end
 
-    %% =====================================================
-    % DOPPELTE ERKENNUNGEN ENTFERNEN
-    % ======================================================
+    %% Doppelte Flanken entfernen
 
-    behalten = [true; diff(impulsStart) >= minImpulsabstand];
+    behalten = [true; diff(startZeit) >= minImpulsabstand];
 
-    impulsStart = impulsStart(behalten);
-    impulsStartIndex = impulsStartIndex(behalten);
+    startZeit = startZeit(behalten);
+    startIndex = startIndex(behalten);
 
-    fprintf('Erkannte Impulsanfänge: %d\n', ...
-        numel(impulsStart));
+    erkannteImpulseGesamt(m) = numel(startZeit);
 
-    %% =====================================================
-    % IMPULSBREITEN BERECHNEN
-    % ======================================================
+    %% Impulsbreiten bestimmen
 
     impulsbreiten = [];
-    endZeiger = 1;
+    endeZeiger = 1;
 
-    for k = 1:numel(impulsStartIndex)
+    for k = 1:numel(startIndex)
 
-        % Passendes Impulsende suchen
-        while endZeiger <= numel(impulsEndIndex) && ...
-                impulsEndIndex(endZeiger) <= impulsStartIndex(k)
+        while endeZeiger <= numel(endeIndex) && ...
+                endeIndex(endeZeiger) <= startIndex(k)
 
-            endZeiger = endZeiger + 1;
+            endeZeiger = endeZeiger + 1;
         end
 
-        if endZeiger > numel(impulsEndIndex)
+        if endeZeiger > numel(endeIndex)
             break;
         end
 
-        gefundenesEnde = impulsEndIndex(endZeiger);
+        aktuellesEnde = endeIndex(endeZeiger);
 
-        % Das Ende muss vor dem nächsten Impuls liegen
-        if k < numel(impulsStartIndex)
-
-            gueltigesEnde = ...
-                gefundenesEnde < impulsStartIndex(k+1);
-
+        if k < numel(startIndex)
+            endeIstGueltig = ...
+                aktuellesEnde < startIndex(k+1);
         else
-
-            gueltigesEnde = true;
-
+            endeIstGueltig = true;
         end
 
-        if gueltigesEnde
+        if endeIstGueltig
 
-            breite = t(gefundenesEnde) - ...
-                t(impulsStartIndex(k));
+            breite = t(aktuellesEnde)-t(startIndex(k));
 
             if breite > 0 && breite < minImpulsabstand
                 impulsbreiten(end+1,1) = breite;
@@ -226,52 +222,54 @@ for dateiNummer = 1:numel(dateien)
         end
     end
 
-    %% =====================================================
-    % IMPULSABSTÄNDE UND FREQUENZ
-    % ======================================================
+    vollstaendigeImpulse(m) = numel(impulsbreiten);
 
-    alleAbstaende = diff(impulsStart);
+    anteilVollstaendigeImpulse(m) = ...
+        100*vollstaendigeImpulse(m)/erkannteImpulseGesamt(m);
 
-    gueltigeAbstaende = alleAbstaende( ...
-        alleAbstaende >= minImpulsabstand & ...
-        alleAbstaende < blockGrenze);
+    if ~isempty(impulsbreiten)
+        medianImpulsbreite_ms(m) = ...
+            median(impulsbreiten)*1000;
+    end
+
+    %% Frequenz bestimmen
+
+    abstaende = diff(startZeit);
+
+    gueltigeAbstaende = abstaende( ...
+        abstaende >= minImpulsabstand & ...
+        abstaende < blockGrenze);
 
     if isempty(gueltigeAbstaende)
         warning('Keine gültigen Impulsabstände gefunden.');
         continue;
     end
 
-    medianImpulsabstand = median(gueltigeAbstaende);
-    mittelImpulsabstand = mean(gueltigeAbstaende);
+    medianImpulsabstand(m) = median(gueltigeAbstaende);
+    frequenzMessung(m) = 1/medianImpulsabstand(m);
 
-    frequenzMedian = 1 / medianImpulsabstand;
-    frequenzMittel = 1 / mittelImpulsabstand;
+    %% Blöcke finden
 
-    %% =====================================================
-    % STIMULATIONSBLOCKE FINDEN
-    % ======================================================
+    neuerBlock = [true; diff(startZeit) > blockGrenze];
+    blockNummer = cumsum(neuerBlock);
 
-    neuerBlock = [true; diff(impulsStart) > blockGrenze];
-    blockZuordnung = cumsum(neuerBlock);
+    gruppenAnzahl = max(blockNummer);
 
-    anzahlGefundeneGruppen = max(blockZuordnung);
-
-    alleBlockStarts = [];
-    alleBlockEnden = [];
+    alleStarts = [];
+    alleEnden = [];
     alleStimDauern = [];
     alleImpulseProBlock = [];
-    alleBlockPerioden = [];
 
-    for b = 1:anzahlGefundeneGruppen
+    for b = 1:gruppenAnzahl
 
-        pulseImBlock = impulsStart(blockZuordnung == b);
+        pulse = startZeit(blockNummer == b);
 
         % Kleine Störgruppen ignorieren
-        if numel(pulseImBlock) < 10
+        if numel(pulse) < 10
             continue;
         end
 
-        lokaleAbstaende = diff(pulseImBlock);
+        lokaleAbstaende = diff(pulse);
 
         lokaleAbstaende = lokaleAbstaende( ...
             lokaleAbstaende >= minImpulsabstand & ...
@@ -281,100 +279,78 @@ for dateiNummer = 1:numel(dateien)
             continue;
         end
 
-        lokaleMedianPeriode = median(lokaleAbstaende);
+        lokalePeriode = median(lokaleAbstaende);
 
-        startZeit = pulseImBlock(1);
+        blockStart = pulse(1);
 
-        % Blockende wird aus letztem Impuls plus einer Periode geschätzt
-        endeZeit = pulseImBlock(end) + lokaleMedianPeriode;
+        % Ende aus letztem Impuls plus einer Periode schätzen
+        blockEnde = pulse(end)+lokalePeriode;
 
-        alleBlockStarts(end+1,1) = startZeit;
-        alleBlockEnden(end+1,1) = endeZeit;
+        alleStarts(end+1,1) = blockStart;
+        alleEnden(end+1,1) = blockEnde;
 
-        alleStimDauern(end+1,1) = endeZeit - startZeit;
+        alleStimDauern(end+1,1) = ...
+            blockEnde-blockStart;
 
-        alleImpulseProBlock(end+1,1) = ...
-            numel(pulseImBlock);
-
-        alleBlockPerioden(end+1,1) = ...
-            lokaleMedianPeriode;
+        alleImpulseProBlock(end+1,1) = numel(pulse);
     end
 
-    anzahlBloecke = numel(alleBlockStarts);
+    anzahlGefundeneBloecke(m) = numel(alleStarts);
 
-    fprintf('Gefundene vollständige Blöcke: %d\n', ...
-        anzahlBloecke);
-
-    if anzahlBloecke == 0
-        warning('Es wurden keine vollständigen Blöcke gefunden.');
+    if isempty(alleStarts)
+        warning('Keine vollständigen Blöcke gefunden.');
         continue;
     end
 
-    %% =====================================================
-    % AUTOMATISCH DIE BESTEN 9 ZUSAMMENHÄNGENDEN BLÖCKE
-    % AUSWÄHLEN
-    % ======================================================
+    %% Beste zusammenhängende Folge aus 9 Blöcken wählen
 
-    if anzahlBloecke > anzahlSollBloecke
+    if numel(alleStarts) > anzahlBloeckeSoll
 
-        anzahlFenster = anzahlBloecke - ...
-            anzahlSollBloecke + 1;
+        anzahlFenster = ...
+            numel(alleStarts)-anzahlBloeckeSoll+1;
 
-        fensterFehler = nan(anzahlFenster,1);
+        fensterBewertung = nan(anzahlFenster,1);
 
-        for fensterStart = 1:anzahlFenster
+        for f = 1:anzahlFenster
 
-            auswahl = fensterStart: ...
-                fensterStart + anzahlSollBloecke - 1;
+            indizes = f:f+anzahlBloeckeSoll-1;
 
-            testStim = alleStimDauern(auswahl);
-            testZyklus = diff(alleBlockStarts(auswahl));
+            testStim = alleStimDauern(indizes);
+            testZyklus = diff(alleStarts(indizes));
 
-            fensterFehler(fensterStart) = ...
+            fensterBewertung(f) = ...
                 mean(abs(testStim-stimSoll)) + ...
                 mean(abs(testZyklus-zyklusSoll));
         end
 
-        [~, besterStart] = min(fensterFehler);
+        [~, besterStart] = min(fensterBewertung);
 
-        verwendeteIndizes = besterStart: ...
-            besterStart + anzahlSollBloecke - 1;
+        auswahl = ...
+            besterStart:besterStart+anzahlBloeckeSoll-1;
 
     else
 
-        verwendeteIndizes = 1:anzahlBloecke;
+        auswahl = 1:numel(alleStarts);
 
     end
 
-    blockStart = alleBlockStarts(verwendeteIndizes);
-    blockEnde = alleBlockEnden(verwendeteIndizes);
-    stimDauer = alleStimDauern(verwendeteIndizes);
+    blockStart = alleStarts(auswahl);
+    blockEnde = alleEnden(auswahl);
+    stimDauer = alleStimDauern(auswahl);
 
     impulseProBlock = ...
-        alleImpulseProBlock(verwendeteIndizes);
-
-    periodenProBlock = ...
-        alleBlockPerioden(verwendeteIndizes);
+        alleImpulseProBlock(auswahl);
 
     anzahlVerwendet = numel(blockStart);
 
-    if anzahlVerwendet < anzahlSollBloecke
-
-        warning(['Es wurden nur %d statt %d vollständigen ' ...
-            'Blöcken gefunden.'], ...
-            anzahlVerwendet, anzahlSollBloecke);
-    end
-
-    %% =====================================================
-    % PAUSEN UND ZYKLUSDAUERN
-    % ======================================================
+    %% Pausen, Zyklen und Drift
 
     if anzahlVerwendet >= 2
 
         zyklusDauer = diff(blockStart);
 
         pauseDauer = ...
-            blockStart(2:end) - blockEnde(1:end-1);
+            blockStart(2:end)-blockEnde(1:end-1);
 
     else
 
@@ -383,403 +359,392 @@ for dateiNummer = 1:numel(dateien)
 
     end
 
-    %% =====================================================
-    % ABWEICHUNGEN BERECHNEN
-    % ======================================================
-
-    stimFehler = stimDauer - stimSoll;
-    pauseFehler = pauseDauer - pauseSoll;
-    zyklusFehler = zyklusDauer - zyklusSoll;
-
     erwarteterStart = blockStart(1) + ...
-        (0:anzahlVerwendet-1)' .* zyklusSoll;
+        (0:anzahlVerwendet-1)'*zyklusSoll;
 
-    kumulativerFehler = blockStart - erwarteterStart;
+    drift = blockStart-erwarteterStart;
 
-    % Letzte Pause ist nicht direkt messbar
-    geschaetztesProtokollEnde = ...
-        blockEnde(end) + pauseSoll;
+    % Letzte Pause ist nicht sichtbar und wird mit 30 s geschätzt
+    geschaetztesEnde = blockEnde(end)+pauseSoll;
 
-    idealesProtokollEnde = ...
-        blockStart(1) + anzahlVerwendet * zyklusSoll;
+    idealesEnde = ...
+        blockStart(1)+anzahlVerwendet*zyklusSoll;
 
-    gesamterEndFehler = ...
-        geschaetztesProtokollEnde - idealesProtokollEnde;
+    endFehler(m) = geschaetztesEnde-idealesEnde;
 
-    %% =====================================================
-    % ERGEBNISTABELLE
-    % ======================================================
+    %% Daten in gemeinsame Matrizen schreiben
 
-    block = (1:anzahlVerwendet)';
+    stimMatrix(m,1:anzahlVerwendet) = stimDauer;
+    driftMatrix(m,1:anzahlVerwendet) = drift;
 
-    pauseTabelle = nan(anzahlVerwendet,1);
-    pauseFehlerTabelle = nan(anzahlVerwendet,1);
-
-    zyklusTabelle = nan(anzahlVerwendet,1);
-    zyklusFehlerTabelle = nan(anzahlVerwendet,1);
+    impulsMatrix(m,1:anzahlVerwendet) = ...
+        impulseProBlock;
 
     if ~isempty(pauseDauer)
-
-        pauseTabelle(1:numel(pauseDauer)) = pauseDauer;
-
-        pauseFehlerTabelle(1:numel(pauseFehler)) = ...
-            pauseFehler;
-
+        pauseMatrix(m,1:numel(pauseDauer)) = pauseDauer;
     end
 
     if ~isempty(zyklusDauer)
-
-        zyklusTabelle(1:numel(zyklusDauer)) = ...
-            zyklusDauer;
-
-        zyklusFehlerTabelle(1:numel(zyklusFehler)) = ...
-            zyklusFehler;
-
+        zyklusMatrix(m,1:numel(zyklusDauer)) = zyklusDauer;
     end
 
-    ergebnisTabelle = table( ...
-        block, ...
-        impulseProBlock, ...
-        periodenProBlock, ...
-        stimDauer, ...
-        stimFehler, ...
-        pauseTabelle, ...
-        pauseFehlerTabelle, ...
-        zyklusTabelle, ...
-        zyklusFehlerTabelle, ...
-        kumulativerFehler, ...
-        'VariableNames', { ...
-        'Block', ...
-        'Impulse', ...
-        'Median_Impulsabstand_s', ...
-        'Stimulationsdauer_s', ...
-        'Stimulationsfehler_s', ...
-        'Pausendauer_s', ...
-        'Pausenfehler_s', ...
-        'Zyklusdauer_s', ...
-        'Zyklusfehler_s', ...
-        'Kumulativer_Fehler_s'});
+    fprintf('Verwendete Blöcke: %d\n', anzahlVerwendet);
+    fprintf('Frequenz: %.4f Hz\n', frequenzMessung(m));
+    fprintf('Endfehler: %.3f s\n', endFehler(m));
+    fprintf('Vollständige Impulse: %.2f %%\n', ...
+        anteilVollstaendigeImpulse(m));
+
+    clear t u impulsMaske startZeit;
+end
+
+%% =========================================================
+% KENNWERTE PRO MESSUNG
+% ==========================================================
+
+stimMittel = mean(stimMatrix,2,'omitnan');
+stimMedian = median(stimMatrix,2,'omitnan');
+stimStd = std(stimMatrix,0,2,'omitnan');
+
+pauseMittel = mean(pauseMatrix,2,'omitnan');
+pauseMedian = median(pauseMatrix,2,'omitnan');
+pauseStd = std(pauseMatrix,0,2,'omitnan');
+
+zyklusMittel = mean(zyklusMatrix,2,'omitnan');
+zyklusMedian = median(zyklusMatrix,2,'omitnan');
+zyklusStd = std(zyklusMatrix,0,2,'omitnan');
+
+impulseMittel = mean(impulsMatrix,2,'omitnan');
+impulseMedian = median(impulsMatrix,2,'omitnan');
+
+frequenzAbweichungProzent = ...
+    100*(frequenzMessung-frequenzSoll)/frequenzSoll;
+
+stimAbweichungProzent = ...
+    100*(stimMittel-stimSoll)/stimSoll;
+
+pauseAbweichungProzent = ...
+    100*(pauseMittel-pauseSoll)/pauseSoll;
+
+zyklusAbweichungProzent = ...
+    100*(zyklusMittel-zyklusSoll)/zyklusSoll;
+
+%% =========================================================
+% GEMEINSAME ERGEBNISTABELLE
+% ==========================================================
+
+vergleichsTabelle = table( ...
+    messungsNamen, ...
+    anzahlGefundeneBloecke, ...
+    frequenzMessung, ...
+    frequenzAbweichungProzent, ...
+    impulseMittel, ...
+    impulseMedian, ...
+    stimMittel, ...
+    stimMedian, ...
+    stimStd, ...
+    pauseMittel, ...
+    pauseMedian, ...
+    pauseStd, ...
+    zyklusMittel, ...
+    zyklusMedian, ...
+    zyklusStd, ...
+    medianImpulsbreite_ms, ...
+    anteilVollstaendigeImpulse, ...
+    endFehler, ...
+    'VariableNames', { ...
+    'Messung', ...
+    'Gefundene_Bloecke', ...
+    'Frequenz_Hz', ...
+    'Frequenzabweichung_Prozent', ...
+    'Impulse_Mittelwert', ...
+    'Impulse_Median', ...
+    'Stim_Mittelwert_s', ...
+    'Stim_Median_s', ...
+    'Stim_Standardabweichung_s', ...
+    'Pause_Mittelwert_s', ...
+    'Pause_Median_s', ...
+    'Pause_Standardabweichung_s', ...
+    'Zyklus_Mittelwert_s', ...
+    'Zyklus_Median_s', ...
+    'Zyklus_Standardabweichung_s', ...
+    'Median_Impulsbreite_ms', ...
+    'Vollstaendige_Impulse_Prozent', ...
+    'Geschaetzter_Endfehler_s'});
+
+fprintf('\n\n============================================\n');
+fprintf('VERGLEICH ALLER MESSUNGEN\n');
+fprintf('============================================\n');
+
+disp(vergleichsTabelle);
 
-    fprintf('\n--- ERGEBNISSE PRO BLOCK ---\n');
-    disp(ergebnisTabelle);
+%% =========================================================
+% REPRODUZIERBARKEIT ÜBER ALLE MESSUNGEN
+% ==========================================================
+
+frequenzGesamtMittel = mean(frequenzMessung,'omitnan');
+frequenzGesamtStd = std(frequenzMessung,'omitnan');
+
+frequenzCV = ...
+    100*frequenzGesamtStd/frequenzGesamtMittel;
+
+stimGesamtMittel = mean(stimMittel,'omitnan');
+stimGesamtStd = std(stimMittel,'omitnan');
 
-    %% =====================================================
-    % STATISTISCHE KENNWERTE
-    % ======================================================
+pauseGesamtMittel = mean(pauseMittel,'omitnan');
+pauseGesamtStd = std(pauseMittel,'omitnan');
 
-    fprintf('\n--- IMPULSABSTÄNDE ---\n');
-    fprintf('Anzahl:             %d\n', ...
-        numel(gueltigeAbstaende));
+zyklusGesamtMittel = mean(zyklusMittel,'omitnan');
+zyklusGesamtStd = std(zyklusMittel,'omitnan');
 
-    fprintf('Mittelwert:         %.6f s\n', ...
-        mean(gueltigeAbstaende));
+maximalerEndfehler = ...
+    max(abs(endFehler),[],'omitnan');
 
-    fprintf('Median:             %.6f s\n', ...
-        median(gueltigeAbstaende));
+mittlererEndfehler = ...
+    mean(abs(endFehler),'omitnan');
 
-    fprintf('Standardabweichung: %.6f s\n', ...
-        std(gueltigeAbstaende));
+fprintf('\n--- REPRODUZIERBARKEIT ---\n');
 
-    fprintf('Minimum:            %.6f s\n', ...
-        min(gueltigeAbstaende));
+fprintf('Frequenz über alle Messungen: %.4f ± %.4f Hz\n', ...
+    frequenzGesamtMittel, frequenzGesamtStd);
 
-    fprintf('Maximum:            %.6f s\n', ...
-        max(gueltigeAbstaende));
+fprintf('Variationskoeffizient der Frequenz: %.3f %%\n', ...
+    frequenzCV);
 
-    fprintf('Frequenz aus Median: %.4f Hz\n', ...
-        frequenzMedian);
+fprintf('Stimulationsdauer: %.4f ± %.4f s\n', ...
+    stimGesamtMittel, stimGesamtStd);
 
-    fprintf('Frequenz aus Mittelwert: %.4f Hz\n', ...
-        frequenzMittel);
+fprintf('Pausendauer: %.4f ± %.4f s\n', ...
+    pauseGesamtMittel, pauseGesamtStd);
 
-    fprintf('\n--- STIMULATIONSDAUER ---\n');
-    fprintf('Mittelwert:         %.6f s\n', mean(stimDauer));
-    fprintf('Median:             %.6f s\n', median(stimDauer));
-    fprintf('Standardabweichung: %.6f s\n', std(stimDauer));
-    fprintf('Minimum:            %.6f s\n', min(stimDauer));
-    fprintf('Maximum:            %.6f s\n', max(stimDauer));
+fprintf('Zyklusdauer: %.4f ± %.4f s\n', ...
+    zyklusGesamtMittel, zyklusGesamtStd);
 
-    if ~isempty(pauseDauer)
+fprintf('Mittlerer absoluter Endfehler: %.3f s\n', ...
+    mittlererEndfehler);
 
-        fprintf('\n--- PAUSENDAUER ---\n');
-        fprintf('Mittelwert:         %.6f s\n', mean(pauseDauer));
-        fprintf('Median:             %.6f s\n', median(pauseDauer));
-        fprintf('Standardabweichung: %.6f s\n', std(pauseDauer));
-        fprintf('Minimum:            %.6f s\n', min(pauseDauer));
-        fprintf('Maximum:            %.6f s\n', max(pauseDauer));
+fprintf('Größter absoluter Endfehler: %.3f s\n', ...
+    maximalerEndfehler);
 
-    end
+%% =========================================================
+% VORLÄUFIGE SYSTEMBEWERTUNG
+% ==========================================================
 
-    if ~isempty(zyklusDauer)
+kriteriumFrequenz = ...
+    mean(abs(frequenzAbweichungProzent),'omitnan') ...
+    <= grenzeFrequenzProzent;
 
-        fprintf('\n--- ZYKLUSDAUER ---\n');
-        fprintf('Mittelwert:         %.6f s\n', mean(zyklusDauer));
-        fprintf('Median:             %.6f s\n', median(zyklusDauer));
-        fprintf('Standardabweichung: %.6f s\n', std(zyklusDauer));
-        fprintf('Minimum:            %.6f s\n', min(zyklusDauer));
-        fprintf('Maximum:            %.6f s\n', max(zyklusDauer));
+kriteriumStim = ...
+    mean(abs(stimAbweichungProzent),'omitnan') ...
+    <= grenzeStimProzent;
 
-    end
+kriteriumPause = ...
+    mean(abs(pauseAbweichungProzent),'omitnan') ...
+    <= grenzePauseProzent;
 
-    if ~isempty(impulsbreiten)
+kriteriumEndfehler = ...
+    maximalerEndfehler <= grenzeEndfehlerSekunden;
 
-        fprintf('\n--- IMPULSBREITE ---\n');
+anzahlErfuellteKriterien = sum([ ...
+    kriteriumFrequenz, ...
+    kriteriumStim, ...
+    kriteriumPause, ...
+    kriteriumEndfehler]);
 
-        fprintf('Vollständig erkannte Impulse: %d von %d\n', ...
-            numel(impulsbreiten), numel(impulsStart));
+fprintf('\n--- VORLÄUFIGE BEWERTUNG ---\n');
 
-        fprintf('Mittelwert:         %.6f ms\n', ...
-            mean(impulsbreiten)*1000);
+fprintf('Frequenzkriterium erfüllt: %s\n', ...
+    string(kriteriumFrequenz));
 
-        fprintf('Median:             %.6f ms\n', ...
-            median(impulsbreiten)*1000);
+fprintf('Stimulationskriterium erfüllt: %s\n', ...
+    string(kriteriumStim));
 
-        fprintf('Standardabweichung: %.6f ms\n', ...
-            std(impulsbreiten)*1000);
+fprintf('Pausenkriterium erfüllt: %s\n', ...
+    string(kriteriumPause));
 
-        fprintf('Minimum:            %.6f ms\n', ...
-            min(impulsbreiten)*1000);
+fprintf('Endfehlerkriterium erfüllt: %s\n', ...
+    string(kriteriumEndfehler));
 
-        fprintf('Maximum:            %.6f ms\n', ...
-            max(impulsbreiten)*1000);
+if anzahlErfuellteKriterien == 4
 
-        fprintf('Unvollständige oder fehlende Impulsenden: %d\n', ...
-            numel(impulsStart)-numel(impulsbreiten));
+    fprintf(['ERGEBNIS: Das System arbeitet unter den festgelegten ' ...
+        'Grenzwerten zeitlich stabil und reproduzierbar.\n']);
 
-    else
+elseif anzahlErfuellteKriterien >= 2
 
-        fprintf('\nKeine vollständigen Impulsbreiten erkannt.\n');
+    fprintf(['ERGEBNIS: Das System ist teilweise reproduzierbar. ' ...
+        'Einzelne zeitliche Parameter weichen jedoch ab.\n']);
 
-    end
+else
 
-    fprintf('\n--- FEHLERWACHSTUM ---\n');
-
-    fprintf('Fehler am Beginn des letzten Blocks: %.3f s\n', ...
-        kumulativerFehler(end));
-
-    fprintf(['Geschätzter Gesamtfehler nach dem letzten ' ...
-        '30S/30R-Zyklus: %.3f s\n'], ...
-        gesamterEndFehler);
-
-    %% =====================================================
-    % GRAFIK 1: GESAMTAUSWERTUNG
-    % ======================================================
-
-    figure( ...
-        'Name', ['SEP-Auswertung: ', dateien{dateiNummer}], ...
-        'Color', 'white');
-
-    tiledlayout(2,2);
-
-    % ------------------------------------------------------
-    % Signalübersicht
-    % ------------------------------------------------------
-
-    nexttile;
-
-    maximalPlotPunkte = 200000;
-
-    schritt = max(1, ...
-        floor(numel(t)/maximalPlotPunkte));
-
-    plot( ...
-        t(1:schritt:end), ...
-        u(1:schritt:end), ...
-        'b');
-
-    hold on;
-
-    yline(schwelle, '--r', 'Schwelle');
-
-    xlabel('Zeit [s]');
-    ylabel('Spannung [V]');
-    title('Gesamte Messaufnahme');
-    grid on;
-
-    % ------------------------------------------------------
-    % Stimulations- und Pausendauer
-    % ------------------------------------------------------
-
-    nexttile;
-
-    dauerMatrix = nan(anzahlVerwendet,2);
-
-    dauerMatrix(:,1) = stimDauer;
-
-    if ~isempty(pauseDauer)
-        dauerMatrix(1:numel(pauseDauer),2) = pauseDauer;
-    end
-
-    balken = bar(block, dauerMatrix);
-
-    hold on;
-    yline(30, '--k', 'Sollwert: 30 s');
-
-    xlabel('Block');
-    ylabel('Dauer [s]');
-    title('Stimulation und Pause');
-
-    legend( ...
-        [balken(1), balken(2)], ...
-        'Stimulation', ...
-        'Pause', ...
-        'Location', 'best');
-
-    grid on;
-
-    % ------------------------------------------------------
-    % Kumulativer Fehler
-    % ------------------------------------------------------
-
-    nexttile;
-
-    plot( ...
-        block, ...
-        kumulativerFehler, ...
-        '-o', ...
-        'LineWidth', 1.5, ...
-        'MarkerFaceColor', 'b');
-
-    hold on;
-    yline(0, '--k', 'Idealer Zeitpunkt');
-
-    xlabel('Block');
-    ylabel('Zeitabweichung [s]');
-    title('Fehlerwachstum über die Blöcke');
-    grid on;
-
-    % ------------------------------------------------------
-    % Verteilung der Impulsabstände
-    % ------------------------------------------------------
-
-    nexttile;
-
-    histogram(gueltigeAbstaende, 40);
-
-    hold on;
-
-    xline( ...
-        medianImpulsabstand, ...
-        '--r', ...
-        'Median');
-
-    xlabel('Impulsabstand [s]');
-    ylabel('Anzahl');
-    title('Verteilung der Impulsabstände');
-    grid on;
-
-    %% =====================================================
-    % GRAFIK 2: EINZELNE ABWEICHUNGEN
-    % ======================================================
-
-    figure( ...
-        'Name', ['Zeitabweichungen: ', dateien{dateiNummer}], ...
-        'Color', 'white');
-
-    tiledlayout(2,1);
-
-    nexttile;
-
-    plot(block, stimFehler, ...
-        '-o', ...
-        'LineWidth', 1.5);
-
-    hold on;
-    yline(0, '--k');
-
-    xlabel('Block');
-    ylabel('Abweichung [s]');
-    title('Abweichung der Stimulationsdauer von 30 s');
-    grid on;
-
-    nexttile;
-
-    if ~isempty(zyklusFehler)
-
-        plot( ...
-            block(1:end-1), ...
-            zyklusFehler, ...
-            '-o', ...
-            'LineWidth', 1.5);
-
-        hold on;
-        yline(0, '--k');
-
-    end
-
-    xlabel('Übergang zum nächsten Block');
-    ylabel('Abweichung [s]');
-    title('Abweichung der Zyklusdauer von 60 s');
-    grid on;
-
-    %% =====================================================
-    % GRAFIK 3: IMPULSBREITEN
-    % ======================================================
-
-    if ~isempty(impulsbreiten)
-
-        figure( ...
-            'Name', ['Impulsbreiten: ', ...
-            dateien{dateiNummer}], ...
-            'Color', 'white');
-
-        tiledlayout(2,1);
-
-        nexttile;
-
-        plot( ...
-            impulsbreiten*1000, ...
-            '.', ...
-            'MarkerSize', 8);
-
-        hold on;
-
-        yline( ...
-            median(impulsbreiten)*1000, ...
-            '--r', ...
-            'Median');
-
-        xlabel('Impulsnummer');
-        ylabel('Impulsbreite [ms]');
-        title('Impulsbreite jedes erkannten Impulses');
-        grid on;
-
-        nexttile;
-
-        histogram(impulsbreiten*1000, 40);
-
-        hold on;
-
-        xline( ...
-            median(impulsbreiten)*1000, ...
-            '--r', ...
-            'Median');
-
-        xlabel('Impulsbreite [ms]');
-        ylabel('Anzahl');
-        title('Verteilung der Impulsbreiten');
-        grid on;
-
-    end
-
-    %% =====================================================
-    % ERGEBNISTABELLE SPEICHERN
-    % ======================================================
-
-    [~, kurzerDateiname, ~] = ...
-        fileparts(dateien{dateiNummer});
-
-    ausgabeDatei = fullfile( ...
-        ordner, ...
-        [kurzerDateiname, '_Auswertung.csv']);
-
-    writetable(ergebnisTabelle, ausgabeDatei);
-
-    fprintf('\nAuswertung gespeichert als:\n%s\n', ...
-        ausgabeDatei);
+    fprintf(['ERGEBNIS: Das System erfüllt die vorläufigen ' ...
+        'Stabilitätskriterien nicht ausreichend.\n']);
 
 end
 
-fprintf('\n============================================\n');
-fprintf('ALLE AUSGEWÄHLTEN DATEIEN WURDEN AUSGEWERTET\n');
-fprintf('============================================\n');
+%% =========================================================
+% GRAFIK 1: DIREKTER VERGLEICH DER FÜNF MESSUNGEN
+% ==========================================================
+
+farben = lines(anzahlDateien);
+blockAchse = 1:anzahlBloeckeSoll;
+
+figure( ...
+    'Name','Vergleich aller fünf Messungen', ...
+    'Color','white');
+
+tiledlayout(2,2);
+
+% Stimulationsdauer
+nexttile;
+hold on;
+
+for m = 1:anzahlDateien
+    plot(blockAchse,stimMatrix(m,:), ...
+        '-o', ...
+        'Color',farben(m,:), ...
+        'LineWidth',1.3);
+end
+
+yline(stimSoll,'--k','Soll: 30 s');
+
+xlabel('Block');
+ylabel('Stimulationsdauer [s]');
+title('Stimulationsdauer aller Messungen');
+legend(messungsNamen,'Location','best');
+grid on;
+
+% Pausendauer
+nexttile;
+hold on;
+
+for m = 1:anzahlDateien
+    plot(blockAchse,pauseMatrix(m,:), ...
+        '-o', ...
+        'Color',farben(m,:), ...
+        'LineWidth',1.3);
+end
+
+yline(pauseSoll,'--k','Soll: 30 s');
+
+xlabel('Block');
+ylabel('Pausendauer [s]');
+title('Pausendauer aller Messungen');
+legend(messungsNamen,'Location','best');
+grid on;
+
+% Fehlerwachstum
+nexttile;
+hold on;
+
+for m = 1:anzahlDateien
+    plot(blockAchse,driftMatrix(m,:), ...
+        '-o', ...
+        'Color',farben(m,:), ...
+        'LineWidth',1.3);
+end
+
+yline(0,'--k','Idealer Zeitpunkt');
+
+xlabel('Block');
+ylabel('Kumulativer Zeitfehler [s]');
+title('Fehlerwachstum über neun Blöcke');
+legend(messungsNamen,'Location','best');
+grid on;
+
+% Impulse pro Block
+nexttile;
+hold on;
+
+for m = 1:anzahlDateien
+    plot(blockAchse,impulsMatrix(m,:), ...
+        '-o', ...
+        'Color',farben(m,:), ...
+        'LineWidth',1.3);
+end
+
+yline(impulseSoll,'--k','Soll: 137');
+
+xlabel('Block');
+ylabel('Erkannte Impulse');
+title('Impulse pro Block');
+legend(messungsNamen,'Location','best');
+grid on;
+
+%% =========================================================
+% GRAFIK 2: RELATIVE ABWEICHUNGEN
+% ==========================================================
+
+figure( ...
+    'Name','Relative Abweichungen', ...
+    'Color','white');
+
+relativeAbweichungen = [ ...
+    abs(frequenzAbweichungProzent), ...
+    abs(stimAbweichungProzent), ...
+    abs(pauseAbweichungProzent), ...
+    abs(zyklusAbweichungProzent)];
+
+bar(relativeAbweichungen);
+
+xlabel('Messung');
+ylabel('Absolute relative Abweichung [%]');
+title('Abweichungen vom jeweiligen Sollwert');
+
+xticks(1:anzahlDateien);
+xticklabels(messungsNamen);
+xtickangle(20);
+
+legend( ...
+    'Frequenz', ...
+    'Stimulation', ...
+    'Pause', ...
+    'Zyklus', ...
+    'Location','best');
+
+grid on;
+
+%% =========================================================
+% GRAFIK 3: ENDFEHLER NACH NEUN ZYKLEN
+% ==========================================================
+
+figure( ...
+    'Name','Endfehler nach neun Wiederholungen', ...
+    'Color','white');
+
+bar(endFehler);
+
+hold on;
+yline(0,'--k');
+
+yline( ...
+    grenzeEndfehlerSekunden, ...
+    '--r', ...
+    'obere Grenze');
+
+yline( ...
+    -grenzeEndfehlerSekunden, ...
+    '--r', ...
+    'untere Grenze');
+
+xlabel('Messung');
+ylabel('Geschätzter Endfehler [s]');
+title('Abweichung nach neun 30S/30R-Zyklen');
+
+xticks(1:anzahlDateien);
+xticklabels(messungsNamen);
+xtickangle(20);
+
+grid on;
+
+%% =========================================================
+% VERGLEICHSTABELLE SPEICHERN
+% ==========================================================
+
+ausgabeDatei = fullfile( ...
+    ordner, ...
+    'Gesamtvergleich_5_Messungen.csv');
+
+writetable(vergleichsTabelle,ausgabeDatei);
+
+fprintf('\nGesamtvergleich gespeichert unter:\n%s\n', ...
+    ausgabeDatei);
