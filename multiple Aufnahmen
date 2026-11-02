@@ -1,355 +1,340 @@
 %% =========================================================
-% BOXPLOTS UND GESAMTES 9-MINUTEN-VERHALTEN
+% ZUSAMMENGEFASSTE AUSWERTUNG
+% Keine einzelnen Messungen oder Blöcke
 % ==========================================================
 
-% Die letzte Pause ist nicht direkt messbar.
-% Deshalb werden bei den Pausen nur Übergang 1 bis 8 gezeigt.
+% Alle Werte untereinander schreiben
+alleMittelungen = impulsMatrix(:);
+alleStimDauern = stimMatrix(:);
+allePausen = pauseMatrix(:);
 
-anzahlMessungen = size(stimMatrix,1);
-anzahlBloecke = size(stimMatrix,2);
+%% Nur gültige Stimulationswerte
 
-farben = lines(anzahlMessungen);
-namen = messungsNamen;
+gueltigStim = ...
+    isfinite(alleMittelungen) & ...
+    isfinite(alleStimDauern);
 
-%% =========================================================
-% 1. STIMULATIONSDAUER ALS BOXPLOT
-% ==========================================================
+mittelungenStim = alleMittelungen(gueltigStim);
+stimDauerGesamt = alleStimDauern(gueltigStim);
 
-figure('Color','white', ...
-    'Name','Verteilung der Stimulationsdauer');
+%% Nur gültige Pausenwerte
 
-tiledlayout(2,1);
+gueltigPause = ...
+    isfinite(alleMittelungen) & ...
+    isfinite(allePausen);
 
-nexttile;
-
-xStim = repmat(1:anzahlBloecke,anzahlMessungen,1);
-
-boxchart( ...
-    xStim(:), ...
-    stimMatrix(:), ...
-    'BoxFaceColor',[0.30 0.60 0.85]);
-
-hold on;
-
-stimMittelBlock = mean(stimMatrix,1,'omitnan');
-stimMedianBlock = median(stimMatrix,1,'omitnan');
-
-plot( ...
-    1:anzahlBloecke, ...
-    stimMittelBlock, ...
-    'rd', ...
-    'MarkerFaceColor','r', ...
-    'DisplayName','Mittelwert');
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Stimulationsblock');
-ylabel('Stimulationsdauer [s]');
-title('Verteilung der Stimulationsdauer über alle Messungen');
-legend('Boxplot','Mittelwert','Sollwert');
-grid on;
-
-% Median und Mittelwert separat
-nexttile;
-
-plot( ...
-    1:anzahlBloecke, ...
-    stimMedianBlock, ...
-    '-o', ...
-    'LineWidth',1.5, ...
-    'DisplayName','Median');
-
-hold on;
-
-plot( ...
-    1:anzahlBloecke, ...
-    stimMittelBlock, ...
-    '-d', ...
-    'LineWidth',1.5, ...
-    'DisplayName','Mittelwert');
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Stimulationsblock');
-ylabel('Stimulationsdauer [s]');
-title('Median und Mittelwert der Stimulationsdauer');
-legend('Location','best');
-grid on;
+mittelungenPause = alleMittelungen(gueltigPause);
+pauseDauerGesamt = allePausen(gueltigPause);
 
 %% =========================================================
-% 2. PAUSENDAUER ALS BOXPLOT
-% ==========================================================
-
-% Nur die tatsächlich messbaren ersten 8 Pausen
-pauseAuswertung = pauseMatrix(:,1:end-1);
-
-anzahlPausen = size(pauseAuswertung,2);
-
-figure('Color','white', ...
-    'Name','Verteilung der Pausendauer');
-
-tiledlayout(2,1);
-
-nexttile;
-
-xPause = repmat(1:anzahlPausen,anzahlMessungen,1);
-
-boxchart( ...
-    xPause(:), ...
-    pauseAuswertung(:), ...
-    'BoxFaceColor',[0.95 0.60 0.25]);
-
-hold on;
-
-pauseMittelBlock = ...
-    mean(pauseAuswertung,1,'omitnan');
-
-pauseMedianBlock = ...
-    median(pauseAuswertung,1,'omitnan');
-
-plot( ...
-    1:anzahlPausen, ...
-    pauseMittelBlock, ...
-    'rd', ...
-    'MarkerFaceColor','r', ...
-    'DisplayName','Mittelwert');
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Pause nach Stimulationsblock');
-ylabel('Pausendauer [s]');
-title('Verteilung der Pausendauer über alle Messungen');
-legend('Boxplot','Mittelwert','Sollwert');
-grid on;
-
-nexttile;
-
-plot( ...
-    1:anzahlPausen, ...
-    pauseMedianBlock, ...
-    '-o', ...
-    'LineWidth',1.5, ...
-    'DisplayName','Median');
-
-hold on;
-
-plot( ...
-    1:anzahlPausen, ...
-    pauseMittelBlock, ...
-    '-d', ...
-    'LineWidth',1.5, ...
-    'DisplayName','Mittelwert');
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Pause nach Stimulationsblock');
-ylabel('Pausendauer [s]');
-title('Median und Mittelwert der Pausendauer');
-legend('Location','best');
-grid on;
-
-%% =========================================================
-% 3. EINZELNE STIMULATIONEN UND PAUSEN VERGLEICHEN
-% ==========================================================
-
-figure('Color','white', ...
-    'Name','Einzelne Messungen im Vergleich');
-
-tiledlayout(2,1);
-
-% Einzelne Stimulationsblöcke
-nexttile;
-hold on;
-
-for m = 1:anzahlMessungen
-
-    plot( ...
-        1:anzahlBloecke, ...
-        stimMatrix(m,:), ...
-        '-o', ...
-        'Color',farben(m,:), ...
-        'LineWidth',1.3, ...
-        'DisplayName',namen(m));
-end
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Stimulationsblock');
-ylabel('Stimulationsdauer [s]');
-title('Stimulationsdauer jeder einzelnen Messung');
-legend('Location','best');
-grid on;
-
-% Einzelne Pausen
-nexttile;
-hold on;
-
-for m = 1:anzahlMessungen
-
-    plot( ...
-        1:anzahlPausen, ...
-        pauseAuswertung(m,:), ...
-        '-o', ...
-        'Color',farben(m,:), ...
-        'LineWidth',1.3, ...
-        'DisplayName',namen(m));
-end
-
-yline(30,'--k','Soll: 30 s');
-
-xlabel('Pause nach Stimulationsblock');
-ylabel('Pausendauer [s]');
-title('Pausendauer jeder einzelnen Messung');
-legend('Location','best');
-grid on;
-
-%% =========================================================
-% 4. FEHLERWACHSTUM ÜBER NEUN WIEDERHOLUNGEN
-% ==========================================================
-
-figure('Color','white', ...
-    'Name','Fehlerwachstum über neun Blöcke');
-
-hold on;
-
-for m = 1:anzahlMessungen
-
-    plot( ...
-        1:anzahlBloecke, ...
-        driftMatrix(m,:), ...
-        '-o', ...
-        'Color',farben(m,:), ...
-        'LineWidth',1.5, ...
-        'DisplayName',namen(m));
-end
-
-driftMedian = median(driftMatrix,1,'omitnan');
-driftMittel = mean(driftMatrix,1,'omitnan');
-
-plot( ...
-    1:anzahlBloecke, ...
-    driftMedian, ...
-    '-ks', ...
-    'LineWidth',2.5, ...
-    'MarkerFaceColor','k', ...
-    'DisplayName','Median aller Messungen');
-
-plot( ...
-    1:anzahlBloecke, ...
-    driftMittel, ...
-    '--rd', ...
-    'LineWidth',2.5, ...
-    'MarkerFaceColor','r', ...
-    'DisplayName','Mittelwert aller Messungen');
-
-yline(0,'--k','Idealer Beginn');
-
-xlabel('Stimulationsblock');
-ylabel('Kumulativer Zeitfehler [s]');
-title('Entwicklung des Zeitfehlers über neun Blöcke');
-legend('Location','best');
-grid on;
-
-%% =========================================================
-% 5. GESAMTES 9-MINUTEN-VERHALTEN
-% ==========================================================
-
-% Idealer Ablauf:
-% 9 x 60 Sekunden = 540 Sekunden
-
-idealGesamtdauer = 540;
-
-% endFehler stammt aus dem vorherigen Hauptcode.
-% Die letzte Pause wurde dort mit 30 Sekunden angenommen.
-
-gesamtDauer = idealGesamtdauer + endFehler;
-
-figure('Color','white', ...
-    'Name','Gesamtdauer der fünf Messungen');
-
-tiledlayout(2,1);
-
-nexttile;
-
-balken = bar(gesamtDauer, ...
-    'FaceColor',[0.35 0.70 0.45]);
-
-hold on;
-yline(540,'--k','Soll: 540 s');
-
-xlabel('Messung');
-ylabel('Geschätzte Gesamtdauer [s]');
-title('Gesamtdauer der neun 30S/30R-Zyklen');
-
-xticks(1:anzahlMessungen);
-xticklabels(namen);
-xtickangle(20);
-
-grid on;
-
-% Abweichung von 540 Sekunden
-nexttile;
-
-bar(endFehler, ...
-    'FaceColor',[0.85 0.35 0.35]);
-
-hold on;
-yline(0,'--k','Ideal');
-
-xlabel('Messung');
-ylabel('Abweichung von 540 s [s]');
-title('Gesamter Zeitfehler nach neun Wiederholungen');
-
-xticks(1:anzahlMessungen);
-xticklabels(namen);
-xtickangle(20);
-
-grid on;
-
-%% =========================================================
-% 6. GESAMTSTATISTIK AUSGEBEN
+% GESAMTSTATISTIK
 % ==========================================================
 
 fprintf('\n========================================\n');
-fprintf('GESAMTSTATISTIK ALLER MESSUNGEN\n');
+fprintf('ZUSAMMENGEFASSTE AUSWERTUNG\n');
 fprintf('========================================\n');
 
-fprintf('\nStimulationsdauer:\n');
-fprintf('Mittelwert: %.4f s\n', ...
-    mean(stimMatrix(:),'omitnan'));
+fprintf('\nSTIMULATIONSDAUER ALLER BLÖCKE:\n');
+fprintf('Anzahl:              %d\n',numel(stimDauerGesamt));
+fprintf('Mittelwert:          %.4f s\n',mean(stimDauerGesamt));
+fprintf('Median:              %.4f s\n',median(stimDauerGesamt));
+fprintf('Standardabweichung:  %.4f s\n',std(stimDauerGesamt));
+fprintf('Minimum:             %.4f s\n',min(stimDauerGesamt));
+fprintf('Maximum:             %.4f s\n',max(stimDauerGesamt));
 
-fprintf('Median: %.4f s\n', ...
-    median(stimMatrix(:),'omitnan'));
+fprintf('\nPAUSENDAUER ALLER BLÖCKE:\n');
+fprintf('Anzahl:              %d\n',numel(pauseDauerGesamt));
+fprintf('Mittelwert:          %.4f s\n',mean(pauseDauerGesamt));
+fprintf('Median:              %.4f s\n',median(pauseDauerGesamt));
+fprintf('Standardabweichung:  %.4f s\n',std(pauseDauerGesamt));
+fprintf('Minimum:             %.4f s\n',min(pauseDauerGesamt));
+fprintf('Maximum:             %.4f s\n',max(pauseDauerGesamt));
 
-fprintf('Standardabweichung: %.4f s\n', ...
-    std(stimMatrix(:),'omitnan'));
+%% =========================================================
+% AUSWERTUNG NACH ANZAHL DER MITTELUNGEN
+% ==========================================================
 
-fprintf('\nPausendauer:\n');
-fprintf('Mittelwert: %.4f s\n', ...
-    mean(pauseAuswertung(:),'omitnan'));
+verschiedeneMittelungen = unique(mittelungenStim);
 
-fprintf('Median: %.4f s\n', ...
-    median(pauseAuswertung(:),'omitnan'));
+anzahlGruppe = nan(size(verschiedeneMittelungen));
+stimMittelGruppe = nan(size(verschiedeneMittelungen));
+stimMedianGruppe = nan(size(verschiedeneMittelungen));
+stimStdGruppe = nan(size(verschiedeneMittelungen));
 
-fprintf('Standardabweichung: %.4f s\n', ...
-    std(pauseAuswertung(:),'omitnan'));
+pauseMittelGruppe = nan(size(verschiedeneMittelungen));
+pauseMedianGruppe = nan(size(verschiedeneMittelungen));
+pauseStdGruppe = nan(size(verschiedeneMittelungen));
 
-fprintf('\nGeschätzte Gesamtdauer:\n');
-fprintf('Mittelwert: %.4f s\n', ...
-    mean(gesamtDauer,'omitnan'));
+for k = 1:numel(verschiedeneMittelungen)
 
-fprintf('Median: %.4f s\n', ...
-    median(gesamtDauer,'omitnan'));
+    aktuelleAnzahl = verschiedeneMittelungen(k);
 
-fprintf('Standardabweichung: %.4f s\n', ...
-    std(gesamtDauer,'omitnan'));
+    stimWerte = stimDauerGesamt( ...
+        mittelungenStim == aktuelleAnzahl);
 
-fprintf('\nGesamter Endfehler:\n');
-fprintf('Mittelwert: %.4f s\n', ...
-    mean(endFehler,'omitnan'));
+    pauseWerte = pauseDauerGesamt( ...
+        mittelungenPause == aktuelleAnzahl);
 
-fprintf('Median: %.4f s\n', ...
-    median(endFehler,'omitnan'));
+    anzahlGruppe(k) = numel(stimWerte);
 
-fprintf('Größter absoluter Fehler: %.4f s\n', ...
-    max(abs(endFehler),[],'omitnan'));
+    stimMittelGruppe(k) = mean(stimWerte);
+    stimMedianGruppe(k) = median(stimWerte);
+    stimStdGruppe(k) = std(stimWerte);
+
+    if ~isempty(pauseWerte)
+
+        pauseMittelGruppe(k) = mean(pauseWerte);
+        pauseMedianGruppe(k) = median(pauseWerte);
+        pauseStdGruppe(k) = std(pauseWerte);
+
+    end
+end
+
+gruppenTabelle = table( ...
+    verschiedeneMittelungen, ...
+    anzahlGruppe, ...
+    stimMittelGruppe, ...
+    stimMedianGruppe, ...
+    stimStdGruppe, ...
+    pauseMittelGruppe, ...
+    pauseMedianGruppe, ...
+    pauseStdGruppe, ...
+    'VariableNames',{ ...
+    'Anzahl_Mittelungen', ...
+    'Anzahl_Bloecke', ...
+    'Stim_Mittelwert_s', ...
+    'Stim_Median_s', ...
+    'Stim_Standardabweichung_s', ...
+    'Pause_Mittelwert_s', ...
+    'Pause_Median_s', ...
+    'Pause_Standardabweichung_s'});
+
+fprintf('\nAUSWERTUNG NACH ANZAHL DER MITTELUNGEN:\n');
+disp(gruppenTabelle);
+
+%% =========================================================
+% ZUSAMMENHANG MITTELUNGEN UND STIMULATIONSDAUER
+% ==========================================================
+
+if numel(unique(mittelungenStim)) >= 2
+
+    korrelationStim = corrcoef( ...
+        mittelungenStim, ...
+        stimDauerGesamt);
+
+    rStim = korrelationStim(1,2);
+
+    stimGerade = polyfit( ...
+        mittelungenStim, ...
+        stimDauerGesamt,1);
+
+    sekundenProMittelung = stimGerade(1);
+
+else
+
+    rStim = NaN;
+    sekundenProMittelung = NaN;
+
+end
+
+%% Zusammenhang Mittelungen und Pause
+
+if numel(unique(mittelungenPause)) >= 2
+
+    korrelationPause = corrcoef( ...
+        mittelungenPause, ...
+        pauseDauerGesamt);
+
+    rPause = korrelationPause(1,2);
+
+    pauseGerade = polyfit( ...
+        mittelungenPause, ...
+        pauseDauerGesamt,1);
+
+    sekundenPauseProMittelung = pauseGerade(1);
+
+else
+
+    rPause = NaN;
+    sekundenPauseProMittelung = NaN;
+
+end
+
+fprintf('\nZUSAMMENHÄNGE:\n');
+
+fprintf(['Veränderung der Stimulationsdauer pro zusätzlicher ' ...
+    'Mittelung: %.4f s\n'],sekundenProMittelung);
+
+fprintf('Korrelation Mittelungen/Stimulationsdauer: %.4f\n', ...
+    rStim);
+
+fprintf(['Veränderung der Pause pro zusätzlicher ' ...
+    'Mittelung: %.4f s\n'],sekundenPauseProMittelung);
+
+fprintf('Korrelation Mittelungen/Pausendauer: %.4f\n', ...
+    rPause);
+
+%% =========================================================
+% GRAFIK 1: BOXPLOTS NACH ANZAHL DER MITTELUNGEN
+% ==========================================================
+
+figure( ...
+    'Color','white', ...
+    'Name','Einfluss der Mittelungen');
+
+tiledlayout(1,2);
+
+% Stimulationsdauer
+nexttile;
+
+boxchart( ...
+    mittelungenStim, ...
+    stimDauerGesamt, ...
+    'BoxFaceColor',[0.25 0.60 0.85]);
+
+hold on;
+
+plot( ...
+    verschiedeneMittelungen, ...
+    stimMittelGruppe, ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',7);
+
+yline(30,'--k','Soll: 30 s');
+
+xlabel('Anzahl der Mittelungen/Impulse');
+ylabel('Stimulationsdauer [s]');
+title('Stimulationsdauer abhängig von Mittelungen');
+grid on;
+
+% Pausendauer
+nexttile;
+
+boxchart( ...
+    mittelungenPause, ...
+    pauseDauerGesamt, ...
+    'BoxFaceColor',[0.95 0.55 0.25]);
+
+hold on;
+
+plot( ...
+    verschiedeneMittelungen, ...
+    pauseMittelGruppe, ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',7);
+
+yline(30,'--k','Soll: 30 s');
+
+xlabel('Mittelungen im vorherigen Block');
+ylabel('Pausendauer [s]');
+title('Pausendauer abhängig von Mittelungen');
+grid on;
+
+%% =========================================================
+% GRAFIK 2: GESAMTVERTEILUNG STIMULATION UND PAUSE
+% ==========================================================
+
+figure( ...
+    'Color','white', ...
+    'Name','Gesamtverteilung');
+
+werteGesamt = [
+    stimDauerGesamt;
+    pauseDauerGesamt
+];
+
+gruppenGesamt = [
+    repmat("Stimulation",numel(stimDauerGesamt),1);
+    repmat("Pause",numel(pauseDauerGesamt),1)
+];
+
+boxchart( ...
+    categorical(gruppenGesamt), ...
+    werteGesamt);
+
+hold on;
+
+gesamtMittelwerte = [
+    mean(stimDauerGesamt), ...
+    mean(pauseDauerGesamt)
+];
+
+plot( ...
+    categorical(["Stimulation","Pause"]), ...
+    gesamtMittelwerte, ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',8);
+
+yline(30,'--k','Soll: 30 s');
+
+ylabel('Dauer [s]');
+title('Gesamtvergleich von Stimulation und Pause');
+grid on;
+
+%% =========================================================
+% GRAFIK 3: GESAMTER 9-MINUTEN-ABLAUF
+% ==========================================================
+
+idealGesamtdauer = 540;
+
+% endFehler wurde im Hauptprogramm berechnet
+gesamtDauer = idealGesamtdauer + endFehler;
+
+gesamtDauer = gesamtDauer(isfinite(gesamtDauer));
+
+figure( ...
+    'Color','white', ...
+    'Name','Gesamter 9-Minuten-Ablauf');
+
+boxchart( ...
+    ones(size(gesamtDauer)), ...
+    gesamtDauer, ...
+    'BoxFaceColor',[0.40 0.70 0.45]);
+
+hold on;
+
+plot( ...
+    1, ...
+    mean(gesamtDauer), ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',8);
+
+yline(540,'--k','Soll: 540 s');
+
+xlim([0.5 1.5]);
+xticks(1);
+xticklabels({'Alle Messungen'});
+
+ylabel('Geschätzte Gesamtdauer [s]');
+title('Gesamtdauer von neun 30S/30R-Zyklen');
+grid on;
+
+%% =========================================================
+% GESAMTDAUER AUSGEBEN
+% ==========================================================
+
+fprintf('\nGESAMTER 9-MINUTEN-ABLAUF:\n');
+fprintf('Sollwert:             540.0000 s\n');
+fprintf('Mittelwert:           %.4f s\n',mean(gesamtDauer));
+fprintf('Median:               %.4f s\n',median(gesamtDauer));
+fprintf('Standardabweichung:   %.4f s\n',std(gesamtDauer));
+
+fprintf('Mittlere Abweichung:  %.4f s\n', ...
+    mean(gesamtDauer)-540);
+
+fprintf('Größte Abweichung:    %.4f s\n', ...
+    max(abs(gesamtDauer-540)));
+
+%% Tabelle speichern
+
+ausgabeDatei = fullfile( ...
+    ordner, ...
+    'Gesamtauswertung_nach_Mittelungen.csv');
+
+writetable(gruppenTabelle,ausgabeDatei);
+
+fprintf('\nTabelle gespeichert unter:\n%s\n',ausgabeDatei);
