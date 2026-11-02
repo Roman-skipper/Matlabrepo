@@ -1,3 +1,316 @@
-Mittelungen,N_Stimulation,Stim_Mittelwert_s,Stim_Median_s,Stim_Standardabweichung_s,N_Pause,Pause_Mittelwert_s,Pause_Median_s,Pause_Standardabweichung_s,N_Zyklus,Zyklus_Mittelwert_s,Zyklus_Median_s,Zyklus_Standardabweichung_s
-137,18,29.7333855555556,29.732395,0.00467095559213674,16,30.236498125,30.23264,0.0321633089547252,16,59.970060625,59.967075,0.0307374847092303
-138,18,29.9513422222222,29.95107,0.00417091689110015,16,30.05816,30.03332,0.0607612370951502,16,60.0093025,59.986015,0.0604329393074113
+%% SEP-AUSWERTUNG FUER DIE IMRaD-ARBEIT (MATLAB R2024a)
+% Ein einziges Skript: CSV-Auswahl, Impulserkennung, Blockanalyse,
+% Statistik, 137/138-Vergleich, Fehlerwachstum und Paper-Abbildungen.
+
+clear; clc; close all;
+
+%% SOLLWERTE
+fSoll = 4.7;
+nSoll = 137;
+stimSoll = 30;
+pauseSoll = 30;
+zyklusSoll = 60;
+bloeckeSoll = 9;
+gesamtSoll = 540;
+
+schwelle = 5;          % Aufnahme auf1: Grundlinie ca. -0,6 V, Pulse bis 20,4 V
+minPulsabstand = 0.10; % Doppelte Flanken/Stoerspitzen unterdruecken
+blockTrennung = 2.0;   % Luecke >2 s trennt Stimulationsbloecke
+minPulseJeBlock = 100; % Kleine Stoergruppen ignorieren
+
+%% DATEIEN AUSWAEHLEN
+[dateien,ordner] = uigetfile('*.csv','Rigol-CSV-Dateien auswaehlen',...
+    'MultiSelect','on');
+if isequal(dateien,0), error('Keine Datei ausgewaehlt.'); end
+if ischar(dateien), dateien={dateien}; end
+
+nM = numel(dateien);
+ziel = fullfile(ordner,'SEP_Ergebnisse');
+if ~exist(ziel,'dir'), mkdir(ziel); end
+
+Impulse = NaN(nM,bloeckeSoll);
+Frequenz = NaN(nM,bloeckeSoll);
+Breite_ms = NaN(nM,bloeckeSoll);
+Stim = NaN(nM,bloeckeSoll);
+Pause = NaN(nM,bloeckeSoll-1);
+Zyklus = NaN(nM,bloeckeSoll-1);
+Startfehler = NaN(nM,bloeckeSoll);
+
+Dauer = NaN(nM,1);
+tIncListe = NaN(nM,1);
+BloeckeGefunden = zeros(nM,1);
+BloeckeVerwendet = zeros(nM,1);
+FehlendeFallflanken = zeros(nM,1);
+
+%% DATEIEN AUSWERTEN
+for m=1:nM
+    fprintf('\n--- %s ---\n',dateien{m});
+    fid=fopen(fullfile(ordner,dateien{m}),'r');
+    if fid<0, warning('Datei nicht lesbar.'); continue; end
+
+    kopf=fgetl(fid);
+    a=regexp(kopf,'t0\s*=\s*([-+0-9.eE]+)\s*s','tokens','once');
+    b=regexp(kopf,'tInc\s*=\s*([-+0-9.eE]+)\s*s','tokens','once');
+    if isempty(b)
+        fclose(fid); warning('tInc wurde nicht gefunden.'); continue
+    end
+    tInc=str2double(b{1});
+    if isempty(a), t0=0; else, t0=str2double(a{1}); end
+    tIncListe(m)=tInc;
+
+    % Nur die erste Spalte lesen; die zwei leeren Spalten ignorieren.
+    C=textscan(fid,'%f%*[^\n]','Delimiter',',','ReturnOnError',false);
+    fclose(fid);
+    u=C{1}; u=u(isfinite(u));
+    if isempty(u), warning('Keine Messwerte gefunden.'); continue; end
+
+    Dauer(m)=(numel(u)-1)*tInc;
+    fprintf('Messwerte: %d | Dauer: %.3f s | Bereich: %.3f bis %.3f V\n',...
+        numel(u),Dauer(m),min(u),max(u));
+
+    % Steigende und fallende 5-V-Flanken.
+    high=u>schwelle;
+    sIdx=find(~high(1:end-1) & high(2:end))+1;
+    eIdx=find( high(1:end-1) & ~high(2:end))+1;
+
+    % Starts, die unrealistisch dicht liegen, entfernen.
+    if ~isempty(sIdx)
+        sIdx=sIdx([true;diff(sIdx)*tInc>=minPulsabstand]);
+    end
+
+    % Zu jedem Start die naechste fallende Flanke suchen.
+    breite=NaN(size(sIdx)); j=1;
+    for k=1:numel(sIdx)
+        while j<=numel(eIdx) && eIdx(j)<=sIdx(k), j=j+1; end
+        if j<=numel(eIdx), breite(k)=(eIdx(j)-sIdx(k))*tInc; end
+    end
+    FehlendeFallflanken(m)=sum(~isfinite(breite));
+
+    pZeit=t0+(sIdx-1)*tInc;
+    if numel(pZeit)<2
+        warning('Zu wenige Pulse erkannt.'); clear u high C; continue
+    end
+
+    % Blockgrenzen aus langen Luecken bilden.
+    bs=[1;find(diff(pZeit)>blockTrennung)+1];
+    be=[bs(2:end)-1;numel(pZeit)];
+    groesse=be-bs+1;
+    gut=groesse>=minPulseJeBlock;
+    bs=bs(gut); be=be(gut);
+
+    BloeckeGefunden(m)=numel(bs);
+    nB=min(numel(bs),bloeckeSoll);
+    BloeckeVerwendet(m)=nB;
+    if nB<9, warning('Nur %d statt 9 Bloecke erkannt.',nB); end
+    if numel(bs)>9
+        fprintf('%d Bloecke gefunden; die ersten 9 werden ausgewertet.\n',numel(bs));
+    end
+
+    blockStart=NaN(1,nB);
+    blockEnde=NaN(1,nB);
+
+    for q=1:nB
+        pos=bs(q):be(q);
+        p=pZeit(pos);
+        dt=diff(p);
+        dt=dt(dt>=minPulsabstand & dt<blockTrennung);
+
+        Impulse(m,q)=numel(p);
+        blockStart(q)=p(1);
+        if ~isempty(dt)
+            periode=median(dt);
+            Frequenz(m,q)=1/periode;
+            % N Pulse entsprechen N Perioden des Stimulationsprogramms.
+            Stim(m,q)=p(end)-p(1)+periode;
+            blockEnde(q)=blockStart(q)+Stim(m,q);
+        end
+        w=breite(pos); w=w(isfinite(w) & w>0);
+        if ~isempty(w), Breite_ms(m,q)=1000*median(w); end
+    end
+
+    if nB>=2
+        Zyklus(m,1:nB-1)=diff(blockStart);          % direkt gemessen
+        Pause(m,1:nB-1)=blockStart(2:end)-blockEnde(1:end-1);
+    end
+    if nB>=1
+        ideal=blockStart(1)+(0:nB-1)*zyklusSoll;
+        Startfehler(m,1:nB)=blockStart-ideal;
+    end
+
+    fprintf('Bloecke: %d | Impulse je Block: ',numel(bs));
+    fprintf('%g ',Impulse(m,1:nB)); fprintf('\n');
+    clear u high C sIdx eIdx breite pZeit
+end
+
+%% WERTE ZUSAMMENFASSEN
+alleImpulse=Impulse(isfinite(Impulse));
+alleF=Frequenz(isfinite(Frequenz));
+alleW=Breite_ms(isfinite(Breite_ms));
+alleStim=Stim(isfinite(Stim));
+allePause=Pause(isfinite(Pause));
+alleZ=Zyklus(isfinite(Zyklus));
+
+% 540 s koennen ohne Endmarker nicht direkt gemessen werden.
+% Darum werden 9 Zyklen aus dem Median der 8 direkt gemessenen Zyklen hochgerechnet.
+GesamtHochgerechnet=NaN(nM,1);
+for m=1:nM
+    x=Zyklus(m,isfinite(Zyklus(m,:)));
+    if numel(x)==8, GesamtHochgerechnet(m)=9*median(x); end
+end
+
+Datei=string(dateien(:));
+Qualitaet=table(Datei,Dauer,tIncListe,BloeckeGefunden,BloeckeVerwendet,...
+    FehlendeFallflanken);
+
+Frequenz_Mittel_Hz=mean(Frequenz,2,'omitnan');
+Frequenz_Median_Hz=median(Frequenz,2,'omitnan');
+Impulse_Mittel=mean(Impulse,2,'omitnan');
+Breite_Median_ms=median(Breite_ms,2,'omitnan');
+Stim_Mittel_s=mean(Stim,2,'omitnan');
+Stim_Median_s=median(Stim,2,'omitnan');
+Pause_Mittel_s=mean(Pause,2,'omitnan');
+Pause_Median_s=median(Pause,2,'omitnan');
+Zyklus_Mittel_s=mean(Zyklus,2,'omitnan');
+Zyklus_Median_s=median(Zyklus,2,'omitnan');
+Fehler_Block9_s=Startfehler(:,9);
+Fehler_zu_540s_s=GesamtHochgerechnet-gesamtSoll;
+
+ProMessung=table(Datei,Frequenz_Mittel_Hz,Frequenz_Median_Hz,...
+    Impulse_Mittel,Breite_Median_ms,Stim_Mittel_s,Stim_Median_s,...
+    Pause_Mittel_s,Pause_Median_s,Zyklus_Mittel_s,Zyklus_Median_s,...
+    Fehler_Block9_s,GesamtHochgerechnet,Fehler_zu_540s_s);
+
+%% BLOCKTABELLE
+Blockdaten=table;
+for m=1:nM
+    for q=1:bloeckeSoll
+        if isfinite(Impulse(m,q))
+            ps=NaN; zy=NaN;
+            if q<9, ps=Pause(m,q); zy=Zyklus(m,q); end
+            z=table(string(dateien{m}),m,q,Impulse(m,q),Frequenz(m,q),...
+                Breite_ms(m,q),Stim(m,q),ps,zy,Startfehler(m,q),...
+                'VariableNames',{'Datei','Messung','Block','Impulse',...
+                'Frequenz_Hz','Impulsbreite_ms','Stimulation_s',...
+                'Pause_s','Zyklus_s','Startfehler_s'});
+            Blockdaten=[Blockdaten;z]; %#ok<AGROW>
+        end
+    end
+end
+
+%% GESAMTSTATISTIK FUER RESULTS-KAPITEL
+Parameter=["Frequenz";"Impulszahl";"Impulsbreite";"Stimulation";...
+    "Pause";"Zyklus";"Gesamtdauer hochgerechnet";"Startfehler Block 9"];
+Einheit=["Hz";"Impulse";"ms";"s";"s";"s";"s";"s"];
+Werte={alleF;alleImpulse;alleW;alleStim;allePause;alleZ;...
+    GesamtHochgerechnet(isfinite(GesamtHochgerechnet));...
+    Fehler_Block9_s(isfinite(Fehler_Block9_s))};
+Soll=[fSoll;nSoll;NaN;stimSoll;pauseSoll;zyklusSoll;gesamtSoll;0];
+
+N=zeros(8,1); Mittelwert=NaN(8,1); Median=NaN(8,1);
+SD=NaN(8,1); Minimum=NaN(8,1); Maximum=NaN(8,1);
+Differenz=NaN(8,1); RelativProzent=NaN(8,1);
+for k=1:8
+    x=Werte{k}; x=x(isfinite(x)); N(k)=numel(x);
+    if ~isempty(x)
+        Mittelwert(k)=mean(x); Median(k)=median(x); SD(k)=std(x);
+        Minimum(k)=min(x); Maximum(k)=max(x);
+        if isfinite(Soll(k))
+            Differenz(k)=Mittelwert(k)-Soll(k);
+            if Soll(k)~=0, RelativProzent(k)=100*Differenz(k)/Soll(k); end
+        end
+    end
+end
+Gesamtstatistik=table(Parameter,Einheit,N,Soll,Mittelwert,Median,SD,...
+    Minimum,Maximum,Differenz,RelativProzent);
+
+%% VERGLEICH NACH IMPULSZAHL, Z.B. 137 GEGEN 138
+Gruppen=unique(alleImpulse);
+Impulsvergleich=table;
+for k=1:numel(Gruppen)
+    G=Gruppen(k);
+    mb=Impulse==G;
+    s=Stim(mb); s=s(isfinite(s));
+    f=Frequenz(mb); f=f(isfinite(f));
+    w=Breite_ms(mb); w=w(isfinite(w));
+
+    mu=Impulse(:,1:end-1)==G;
+    p=Pause(mu); p=p(isfinite(p));
+    z=Zyklus(mu); z=z(isfinite(z));
+
+    neu=table(G,numel(s),mean(f,'omitnan'),mean(w,'omitnan'),...
+        mean(s,'omitnan'),median(s,'omitnan'),std(s,'omitnan'),...
+        mean(p,'omitnan'),median(p,'omitnan'),std(p,'omitnan'),...
+        mean(z,'omitnan'),median(z,'omitnan'),std(z,'omitnan'),...
+        'VariableNames',{'Impulse','N_Bloecke','Frequenz_Mittel_Hz',...
+        'Breite_Mittel_ms','Stim_Mittel_s','Stim_Median_s','Stim_SD_s',...
+        'Pause_Mittel_s','Pause_Median_s','Pause_SD_s',...
+        'Zyklus_Mittel_s','Zyklus_Median_s','Zyklus_SD_s'});
+    Impulsvergleich=[Impulsvergleich;neu]; %#ok<AGROW>
+end
+
+%% AUSGABE UND CSV-TABELLEN
+disp('=== QUALITAET ==='); disp(Qualitaet);
+disp('=== PRO MESSUNG ==='); disp(ProMessung);
+disp('=== GESAMTSTATISTIK ==='); disp(Gesamtstatistik);
+disp('=== IMPULSZAHLVERGLEICH ==='); disp(Impulsvergleich);
+
+writetable(Qualitaet,fullfile(ziel,'01_Qualitaet.csv'));
+writetable(ProMessung,fullfile(ziel,'02_Pro_Messung.csv'));
+writetable(Blockdaten,fullfile(ziel,'03_Blockdaten.csv'));
+writetable(Gesamtstatistik,fullfile(ziel,'04_Gesamtstatistik.csv'));
+writetable(Impulsvergleich,fullfile(ziel,'05_Impulszahlvergleich.csv'));
+
+%% ABBILDUNG 1: GESAMTVERTEILUNGEN
+f1=figure('Color','w');
+tiledlayout(2,2,'TileSpacing','compact');
+nexttile; boxchart(alleStim); yline(30,'r--'); ylabel('Stimulation [s]'); grid on
+nexttile; boxchart(allePause); yline(30,'r--'); ylabel('Pause [s]'); grid on
+nexttile; boxchart(alleZ); yline(60,'r--'); ylabel('Zyklus [s]'); grid on
+nexttile; boxchart(alleF); yline(4.7,'r--'); ylabel('Frequenz [Hz]'); grid on
+sgtitle('Gesamtergebnis aller Messungen');
+exportgraphics(f1,fullfile(ziel,'Abb1_Gesamtverteilungen.png'),'Resolution',300);
+
+%% ABBILDUNG 2: 137/138 UND ANDERE IMPULSZAHLEN
+f2=figure('Color','w');
+tiledlayout(1,3,'TileSpacing','compact');
+nexttile
+boxchart(categorical(Impulse(isfinite(Stim))),Stim(isfinite(Stim)));
+yline(30,'r--'); xlabel('Impulse'); ylabel('Stimulation [s]'); grid on
+U=Impulse(:,1:end-1);
+nexttile
+maske=isfinite(Pause)&isfinite(U);
+boxchart(categorical(U(maske)),Pause(maske));
+yline(30,'r--'); xlabel('Impulse im Block'); ylabel('Pause [s]'); grid on
+nexttile
+maske=isfinite(Zyklus)&isfinite(U);
+boxchart(categorical(U(maske)),Zyklus(maske));
+yline(60,'r--'); xlabel('Impulse im Block'); ylabel('Zyklus [s]'); grid on
+sgtitle('Einfluss der erkannten Impulszahl');
+exportgraphics(f2,fullfile(ziel,'Abb2_Impulszahl.png'),'Resolution',300);
+
+%% ABBILDUNG 3: FEHLERWACHSTUM UEBER 9 BLOCKSTARTS
+f3=figure('Color','w');
+x=1:9;
+med=median(Startfehler,1,'omitnan');
+lo=min(Startfehler,[],1,'omitnan');
+hi=max(Startfehler,[],1,'omitnan');
+errorbar(x,med,med-lo,hi-med,'o-','LineWidth',1.5);
+yline(0,'r--','Soll'); grid on; xticks(1:9)
+xlabel('Block'); ylabel('Startfehler [s]');
+title('Zeitfehler: Median und Spannweite aller Messungen');
+exportgraphics(f3,fullfile(ziel,'Abb3_Fehlerwachstum.png'),'Resolution',300);
+
+%% ABBILDUNG 4: REPRODUZIERBARKEIT
+f4=figure('Color','w');
+tiledlayout(2,2,'TileSpacing','compact');
+nexttile; bar(Frequenz_Mittel_Hz); yline(4.7,'r--'); ylabel('Hz'); title('Frequenz'); grid on
+nexttile; bar(Stim_Mittel_s); yline(30,'r--'); ylabel('s'); title('Stimulation'); grid on
+nexttile; bar(Pause_Mittel_s); yline(30,'r--'); ylabel('s'); title('Pause'); grid on
+nexttile; bar(Zyklus_Mittel_s); yline(60,'r--'); ylabel('s'); title('Zyklus'); grid on
+sgtitle('Reproduzierbarkeit der Messungen');
+exportgraphics(f4,fullfile(ziel,'Abb4_Reproduzierbarkeit.png'),'Resolution',300);
+
+save(fullfile(ziel,'SEP_komplette_Auswertung.mat'));
+fprintf('\nFERTIG. Ergebnisse gespeichert in:\n%s\n',ziel);
+fprintf(['Wichtig: Der Fehler bis zum Start von Block 9 ist direkt gemessen.\n'...
+    'Die Gesamtdauer von 9 Zyklen wurde hochgerechnet, weil kein Endmarker vorliegt.\n']);
