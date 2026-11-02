@@ -333,3 +333,172 @@ writetable(mittelungsTabelle,ausgabeDatei);
 
 fprintf('\nTabelle gespeichert unter:\n%s\n', ...
     ausgabeDatei);
+
+%% =========================================================
+% ZUSATZGRAFIK 1:
+% GESAMTVERTEILUNG STIMULATION, PAUSE UND ZYKLUS
+% ==========================================================
+
+alleZyklen = zyklusWerte(isfinite(zyklusWerte));
+
+gesamtWerte = [
+    stimWerte;
+    pauseWerte;
+    alleZyklen
+];
+
+gesamtGruppen = [
+    repmat("Stimulation",numel(stimWerte),1);
+    repmat("Pause",numel(pauseWerte),1);
+    repmat("60-s-Zyklus",numel(alleZyklen),1)
+];
+
+figure( ...
+    'Color','white', ...
+    'Name','Gesamtverteilung');
+
+boxchart( ...
+    categorical(gesamtGruppen), ...
+    gesamtWerte);
+
+hold on;
+
+gesamtMittelwerte = [
+    mean(stimWerte,'omitnan'), ...
+    mean(pauseWerte,'omitnan'), ...
+    mean(alleZyklen,'omitnan')
+];
+
+plot( ...
+    categorical(["Stimulation","Pause","60-s-Zyklus"]), ...
+    gesamtMittelwerte, ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',8);
+
+% Sollwerte
+plot( ...
+    categorical(["Stimulation","Pause","60-s-Zyklus"]), ...
+    [30 30 60], ...
+    'ks', ...
+    'MarkerFaceColor','k', ...
+    'MarkerSize',7);
+
+ylabel('Dauer [s]');
+title('Gesamtverteilung aller Messwerte');
+
+legend( ...
+    'Verteilung', ...
+    'Mittelwert', ...
+    'Sollwert', ...
+    'Location','best');
+
+grid on;
+
+%% =========================================================
+% ZUSATZGRAFIK 2:
+% GESAMTER 9-MINUTEN-ABLAUF
+% ==========================================================
+
+idealGesamtdauer = 540;
+
+% endFehler wurde im Hauptcode berechnet.
+% Die letzte Pause wird mit 30 Sekunden angenommen.
+gesamtDauer = idealGesamtdauer + endFehler;
+
+gesamtDauer = gesamtDauer(isfinite(gesamtDauer));
+
+figure( ...
+    'Color','white', ...
+    'Name','Gesamter 9-Minuten-Ablauf');
+
+tiledlayout(1,2);
+
+%% Gesamtdauer
+
+nexttile;
+
+boxchart( ...
+    ones(size(gesamtDauer)), ...
+    gesamtDauer, ...
+    'BoxFaceColor',[0.35 0.70 0.45]);
+
+hold on;
+
+plot( ...
+    1, ...
+    mean(gesamtDauer), ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',8);
+
+yline(540,'--k','Soll: 540 s');
+
+xlim([0.5 1.5]);
+xticks(1);
+xticklabels({'Alle Messungen'});
+
+ylabel('Geschätzte Gesamtdauer [s]');
+title('Dauer des gesamten Ablaufs');
+grid on;
+
+%% Gesamtabweichung
+
+nexttile;
+
+gesamtAbweichung = gesamtDauer-540;
+
+boxchart( ...
+    ones(size(gesamtAbweichung)), ...
+    gesamtAbweichung, ...
+    'BoxFaceColor',[0.85 0.40 0.35]);
+
+hold on;
+
+plot( ...
+    1, ...
+    mean(gesamtAbweichung), ...
+    'rd', ...
+    'MarkerFaceColor','r', ...
+    'MarkerSize',8);
+
+yline(0,'--k','Ideal');
+
+xlim([0.5 1.5]);
+xticks(1);
+xticklabels({'Alle Messungen'});
+
+ylabel('Abweichung [s]');
+title('Fehler nach neun Wiederholungen');
+grid on;
+
+%% =========================================================
+% ZUSAMMENGEFASSTE AUSGABE
+% ==========================================================
+
+fprintf('\n========================================\n');
+fprintf('GESAMTAUSSAGE\n');
+fprintf('========================================\n');
+
+fprintf('\nStimulation:\n');
+fprintf('Mittelwert: %.4f s\n',mean(stimWerte,'omitnan'));
+fprintf('Median:     %.4f s\n',median(stimWerte,'omitnan'));
+fprintf('Streuung:   %.4f s\n',std(stimWerte,'omitnan'));
+
+fprintf('\nPause:\n');
+fprintf('Mittelwert: %.4f s\n',mean(pauseWerte,'omitnan'));
+fprintf('Median:     %.4f s\n',median(pauseWerte,'omitnan'));
+fprintf('Streuung:   %.4f s\n',std(pauseWerte,'omitnan'));
+
+fprintf('\n60-s-Zyklus:\n');
+fprintf('Mittelwert: %.4f s\n',mean(alleZyklen,'omitnan'));
+fprintf('Median:     %.4f s\n',median(alleZyklen,'omitnan'));
+fprintf('Streuung:   %.4f s\n',std(alleZyklen,'omitnan'));
+
+fprintf('\n9-Minuten-Ablauf:\n');
+fprintf('Sollwert:              540.0000 s\n');
+fprintf('Mittlere Gesamtdauer:  %.4f s\n',mean(gesamtDauer));
+fprintf('Median der Gesamtdauer: %.4f s\n',median(gesamtDauer));
+fprintf('Mittlere Abweichung:   %.4f s\n',mean(gesamtAbweichung));
+fprintf('Größte Abweichung:     %.4f s\n', ...
+    max(abs(gesamtAbweichung)));
