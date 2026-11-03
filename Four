@@ -1,0 +1,241 @@
+%% FOURIER-ANALYSE DES 30S/30R-STIMULATIONSMUSTERS
+% MATLAB R2024a
+% Benoetigte Datei: 03_Blockdaten.csv aus der bisherigen SEP-Auswertung.
+%
+% Das Skript zeigt:
+% 1. idealen und gemessenen zeitlichen 30S/30R-Verlauf,
+% 2. FFT-Spektrum der langsamen Blockwiederholung,
+% 3. Phasen-/Zeitverschiebung bei 1/60 Hz.
+%
+% Wichtig: Analysiert wird das technische Stimulationsmuster,
+% nicht die biologische Gehirnantwort.
+
+clear; clc; close all;
+
+%% 1. BLOCKDATEN AUSWAEHLEN
+[datei,ordner] = uigetfile('*.csv',...
+    'Bitte 03_Blockdaten.csv auswaehlen');
+
+if isequal(datei,0)
+    error('Keine Datei ausgewaehlt.');
+end
+
+T = readtable(fullfile(ordner,datei),...
+    'VariableNamingRule','preserve');
+
+benoetigt = ["Messung","Block","Stimulation_s","Startfehler_s"];
+if ~all(ismember(benoetigt,string(T.Properties.VariableNames)))
+    error(['Die CSV braucht diese Spalten: Messung, Block, ' ...
+           'Stimulation_s und Startfehler_s.']);
+end
+
+%% 2. EINSTELLUNGEN
+Fs = 4;                     % 4 Werte pro Sekunde wie im HBM-Paper
+gesamtzeit = 540;           % 9 Zyklen x 60 s
+zyklusSoll = 60;
+stimSoll = 30;
+fSoll = 1/zyklusSoll;       % 0,01667 Hz
+
+t = (0:1/Fs:gesamtzeit-1/Fs)';
+N = numel(t);
+messungen = unique(T.Messung);
+nM = numel(messungen);
+
+%% 3. PERFEKTES 30S/30R-SIGNAL ERZEUGEN
+% 1 = Stimulation, 0 = Pause
+ideal = zeros(N,1);
+
+for block = 1:9
+    start = (block-1)*zyklusSoll;
+    ende = start + stimSoll;
+    ideal(t >= start & t < ende) = 1;
+end
+
+%% 4. GEMESSENE ABLAEUFE AUS DER BLOCKTABELLE NACHBAUEN
+gemessen = NaN(N,nM);
+vollstaendig = false(nM,1);
+
+for m = 1:nM
+    zeilen = T(T.Messung == messungen(m),:);
+    zeilen = sortrows(zeilen,'Block');
+
+    if height(zeilen) < 9
+        warning('Messung %g hat nur %d statt 9 Bloecke.',...
+            messungen(m),height(zeilen));
+        continue
+    end
+
+    signal = zeros(N,1);
+
+    for k = 1:9
+        block = zeilen.Block(k);
+        start = (block-1)*zyklusSoll + zeilen.Startfehler_s(k);
+        ende = start + zeilen.Stimulation_s(k);
+        signal(t >= start & t < ende) = 1;
+    end
+
+    gemessen(:,m) = signal;
+    vollstaendig(m) = true;
+end
+
+gemessen = gemessen(:,vollstaendig);
+messungen = messungen(vollstaendig);
+nM = numel(messungen);
+
+if nM == 0
+    error('Keine Messung mit 9 vollstaendigen Bloecken gefunden.');
+end
+
+mittelSignal = mean(gemessen,2);
+
+%% 5. FFT BERECHNEN
+% Mittelwert entfernen, weil der Gleichanteil bei 0 Hz nicht interessiert.
+xIdeal = ideal - mean(ideal);
+YIdeal = fft(xIdeal);
+
+amplitudeIdeal = abs(YIdeal/N);
+amplitudeIdeal = amplitudeIdeal(1:floor(N/2)+1);
+amplitudeIdeal(2:end-1) = 2*amplitudeIdeal(2:end-1);
+
+amplitudeMessung = NaN(floor(N/2)+1,nM);
+phaseMessung = NaN(nM,1);
+
+for m = 1:nM
+    x = gemessen(:,m) - mean(gemessen(:,m));
+    Y = fft(x);
+
+    A = abs(Y/N);
+    A = A(1:floor(N/2)+1);
+    A(2:end-1) = 2*A(2:end-1);
+    amplitudeMessung(:,m) = A;
+end
+
+f = Fs*(0:floor(N/2))/N;
+mittelAmplitude = mean(amplitudeMessung,2,'omitnan');
+sdAmplitude = std(amplitudeMessung,0,2,'omitnan');
+
+% FFT-Stelle, die 1/60 Hz entspricht
+[~,idxSoll] = min(abs(f-fSoll));
+fFFT = f(idxSoll);
+phaseIdeal = angle(YIdeal(idxSoll));
+
+% Hauptpeak im interessierenden langsamen Bereich suchen
+suchbereich = f >= 0.005 & f <= 0.04;
+indizes = find(suchbereich);
+[~,lokal] = max(mittelAmplitude(suchbereich));
+idxPeak = indizes(lokal);
+fPeak = f(idxPeak);
+zyklusFFT = 1/fPeak;
+
+% Phase jeder Messung bei 1/60 Hz in Zeitverschiebung umrechnen
+for m = 1:nM
+    x = gemessen(:,m) - mean(gemessen(:,m));
+    Y = fft(x);
+    deltaPhase = angle(exp(1i*(angle(Y(idxSoll))-phaseIdeal)));
+    phaseMessung(m) = deltaPhase;
+end
+
+zeitverschiebung_s = phaseMessung/(2*pi*fFFT);
+
+%% 6. KENNWERTE AUSGEBEN
+fprintf('\n========================================\n');
+fprintf('FOURIER-ANALYSE DES BLOCKRHYTHMUS\n');
+fprintf('========================================\n');
+fprintf('Ausgewertete Messungen: %d\n',nM);
+fprintf('Aufnahmedauer: %.1f s\n',gesamtzeit);
+fprintf('Frequenzaufloesung: %.6f Hz\n',Fs/N);
+fprintf('Sollfrequenz 1/60: %.6f Hz\n',fSoll);
+fprintf('Naechste FFT-Stelle: %.6f Hz\n',fFFT);
+fprintf('Staerkster Blockpeak: %.6f Hz\n',fPeak);
+fprintf('Zyklus aus FFT-Peak: %.3f s\n',zyklusFFT);
+fprintf('Amplitude bei 1/60 Hz, ideal: %.6f\n',amplitudeIdeal(idxSoll));
+fprintf('Amplitude bei 1/60 Hz, gemessen: %.6f\n',...
+    mittelAmplitude(idxSoll));
+fprintf('Mittlere Phasenverschiebung: %.3f Grad\n',...
+    rad2deg(mean(phaseMessung)));
+fprintf('Entsprechende Zeitverschiebung: %.3f s\n',...
+    mean(zeitverschiebung_s));
+
+%% 7. ERGEBNISTABELLE
+FourierErgebnis = table(...
+    fSoll,fFFT,fPeak,zyklusFFT,...
+    amplitudeIdeal(idxSoll),mittelAmplitude(idxSoll),...
+    mean(zeitverschiebung_s),std(zeitverschiebung_s),...
+    'VariableNames',{...
+    'Sollfrequenz_Hz','FFT_Frequenzstelle_Hz',...
+    'Gemessener_Hauptpeak_Hz','Zyklus_aus_FFT_s',...
+    'Amplitude_ideal','Amplitude_gemessen',...
+    'Zeitverschiebung_Mittel_s','Zeitverschiebung_SD_s'});
+
+disp(FourierErgebnis);
+
+PhasenTabelle = table(messungen,rad2deg(phaseMessung),...
+    zeitverschiebung_s,...
+    'VariableNames',{'Messung','Phasenverschiebung_Grad',...
+    'Zeitverschiebung_s'});
+
+disp(PhasenTabelle);
+
+%% 8. SAUBERE GESAMTABILDUNG
+fig = figure('Color','w','Position',[100 100 1100 850]);
+layout = tiledlayout(3,1,'TileSpacing','compact','Padding','compact');
+
+% A: Zeitverlauf
+nexttile
+stairs(t,ideal,'k--','LineWidth',1.3); hold on
+plot(t,mittelSignal,'Color',[0 0.45 0.74],'LineWidth',1.5);
+xlim([0 540]); ylim([-0.08 1.08]);
+yticks([0 1]); yticklabels({'Pause','Stimulation'});
+xlabel('Zeit [s]');
+title('A: Zeitlicher Ablauf der neun 30S/30R-Zyklen');
+legend('Ideal','Mittelwert der Messungen','Location','southoutside',...
+    'Orientation','horizontal');
+grid on
+
+% B: Frequenzspektrum
+nexttile
+plot(f,amplitudeIdeal,'k--','LineWidth',1.3); hold on
+plot(f,mittelAmplitude,'Color',[0 0.45 0.74],'LineWidth',1.8);
+xline(fSoll,'r--','1/60 Hz = 0,01667 Hz',...
+    'LabelVerticalAlignment','bottom','LineWidth',1.2);
+plot(fPeak,mittelAmplitude(idxPeak),'ro','MarkerFaceColor','r');
+xlim([0.005 0.06]);
+xlabel('Frequenz [Hz]');
+ylabel('Amplitude');
+title(sprintf('B: FFT-Spektrum - Hauptpeak %.5f Hz (%.2f s)',...
+    fPeak,zyklusFFT));
+legend('Ideal','Gemessen','Sollfrequenz','Gemessener Peak',...
+    'Location','northeast');
+grid on
+
+% C: Phasenverschiebung
+nexttile
+bar(1:nM,zeitverschiebung_s,...
+    'FaceColor',[0.20 0.60 0.45]);
+yline(0,'k--','Keine Verschiebung');
+xlabel('Messung');
+ylabel('Zeitverschiebung [s]');
+title('C: Aus der FFT-Phase bestimmte zeitliche Verschiebung');
+xticks(1:nM);
+xticklabels(string(messungen));
+grid on
+
+title(layout,'Fourier-Analyse der technischen SEP-Blocksteuerung',...
+    'FontWeight','bold');
+
+%% 9. SPEICHERN
+ausgabeOrdner = fullfile(ordner,'Fourier_Ergebnisse');
+if ~exist(ausgabeOrdner,'dir')
+    mkdir(ausgabeOrdner);
+end
+
+exportgraphics(fig,...
+    fullfile(ausgabeOrdner,'Fourier_Blockanalyse.png'),...
+    'Resolution',300);
+writetable(FourierErgebnis,...
+    fullfile(ausgabeOrdner,'Fourier_Kennwerte.csv'));
+writetable(PhasenTabelle,...
+    fullfile(ausgabeOrdner,'Fourier_Phase_pro_Messung.csv'));
+
+fprintf('\nAbbildung und Tabellen gespeichert in:\n%s\n',ausgabeOrdner);
+
