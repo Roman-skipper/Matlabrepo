@@ -24,6 +24,8 @@ zyklusSoll = 60;
 FsFFT = 100;             % Nur Raster fuer Ereignisspektrum, nicht Rohdaten
 portion = 1000000;       % Speichersparender CSV-Import
 fGemeinsam = (0.005:0.00015:6)';
+phaseMinLeistung = 0.01; % Darstellungsgrenze: 1 % des jeweiligen Leistungsmaximums
+phaseMinR = 0.20;        % Unterhalb: mittlere Phasenrichtung nicht anzeigen
 
 blau = [0.10 0.36 0.63];
 orange = [0.86 0.40 0.15];
@@ -52,6 +54,7 @@ Pause = nan(nM,nBloecke-1);
 Zyklus = nan(nM,nBloecke-1);
 Startfehler = nan(nM,nBloecke);
 Spektren = nan(numel(fGemeinsam),nM);
+KomplexSpektren = complex(nan(numel(fGemeinsam),nM));
 Gueltig = false(nM,1);
 Status = repmat("Nicht ausgewertet",nM,1);
 BloeckeGefunden = zeros(nM,1);
@@ -165,6 +168,10 @@ for m = 1:nM
         P = interp1(f,leistung,fGemeinsam,'linear',0);
         if any(~isfinite(P)) || max(P)<=0, error('Ungueltiges Spektrum.'); end
         Spektren(:,m) = P/max(P); % eine Normierung ueber beide Frequenzbereiche
+        % Winkel NICHT direkt interpolieren (Sprung bei +/-180 Grad).
+        % Stattdessen komplexe Fourierkoeffizienten interpolieren.
+        KomplexSpektren(:,m) = interp1(f,Y(1:numel(f)), ...
+            fGemeinsam,'linear',NaN);
         Gueltig(m) = true; Status(m) = "OK";
         fprintf('Frequenz %.6f Hz | Zyklus %.6f s\n', ...
             mean(Frequenz(m,:)),mean(Zyklus(m,:)));
@@ -189,6 +196,7 @@ Impulse = Impulse(Gueltig,:); Frequenz = Frequenz(Gueltig,:);
 Stim = Stim(Gueltig,:); Pause = Pause(Gueltig,:);
 Zyklus = Zyklus(Gueltig,:); Startfehler = Startfehler(Gueltig,:);
 Spektren = Spektren(:,Gueltig); nG = sum(Gueltig);
+KomplexSpektren = KomplexSpektren(:,Gueltig);
 
 %% 4. Tabellen und numerische Konsistenz
 residuum = abs(Stim(:,1:end-1)+Pause-Zyklus);
@@ -367,8 +375,61 @@ end
 title(tl4,sprintf('Vergleich der %d Aufnahmen',nG));
 subtitle(tl4,'Jeder Punkt = eine Aufnahme | SD beschreibt die Streuung zwischen Aufnahmemittelwerten');
 
-%% 9. Einheitlicher Stil und Export
-figuren = [fig1 fig2 fig3 fig4];
+%% 9. Phasenspektrum: Bezug = erster erkannter Blockbeginn jeder Aufnahme
+% Phase der gefensterten Ereignisfolge, KEINE Verzoegerung gegen ein
+% ideales 30/30-Signal und KEINE Latenz gegen einen externen Startbefehl.
+% Schwache Frequenzanteile haben keine stabil interpretierbare Phase.
+% Keine lineare Winkelmittelung: +179 und -179 Grad ergeben etwa 180,
+% nicht 0 Grad. Deshalb kreisfoermiger Mittelwert der Einheitszeiger.
+PhaseGueltig = Spektren>=phaseMinLeistung & ...
+    isfinite(KomplexSpektren) & abs(KomplexSpektren)>0;
+PhaseEinzel_deg = rad2deg(angle(KomplexSpektren));
+PhaseEinzel_deg(~PhaseGueltig) = NaN;
+Einheitszeiger = complex(zeros(size(KomplexSpektren)));
+Einheitszeiger(PhaseGueltig) = ...
+    KomplexSpektren(PhaseGueltig)./abs(KomplexSpektren(PhaseGueltig));
+PhaseN = sum(PhaseGueltig,2);
+ZeigerMittel = sum(Einheitszeiger,2)./max(PhaseN,1);
+PhaseR = abs(ZeigerMittel); % 0: Richtungen heben sich auf; 1: gleiche Phase
+PhaseR(PhaseN==0) = NaN;
+PhaseMittel_deg = rad2deg(angle(ZeigerMittel));
+phaseMinAufnahmen = max(1,ceil(nG/2));
+PhaseAnzeige = PhaseN>=phaseMinAufnahmen & PhaseR>=phaseMinR;
+PhaseMittel_deg(~PhaseAnzeige) = NaN;
+
+fig5 = figure('Color','w','Position',[100 100 1100 530]);
+axPhase = axes(fig5); hold(axPhase,'on');
+set(axPhase,'XScale','log');
+for j = 1:nG
+    plot(fGemeinsam,PhaseEinzel_deg(:,j),'.','Color',hell, ...
+        'MarkerSize',4,'HandleVisibility','off');
+end
+% Punkte statt Linien verhindern falsche Verbindungen ueber Phasenspruenge
+% oder ausgeblendete Frequenzbereiche.
+hPhase = plot(fGemeinsam,PhaseMittel_deg,'.','Color',blau,'MarkerSize',7);
+xline(1/zyklusSoll,':','Color',grau,'HandleVisibility','off');
+xline(fSoll,':','Color',grau,'HandleVisibility','off');
+yline(0,':','Color',grau,'HandleVisibility','off');
+xlim([0.008 6]); ylim([-190 190]); yticks(-180:90:180);
+xticks([0.01 1/60 0.05 0.1 0.5 1 4.7]);
+xticklabels({'0,01','0,0167','0,05','0,1','0,5','1','4,7'});
+xlabel('Frequenz [Hz] - logarithmische Achse'); ylabel('Phase [Grad]');
+title('Phasenspektrum der erkannten Impulsanfaenge');
+subtitle(sprintf(['Bezug: erster Blockbeginn | helle Punkte: Einzelaufnahmen\n' ...
+    'Leistung >= %.1f %% | Mittel aus mindestens %d Aufnahmen, R >= %.2f'], ...
+    100*phaseMinLeistung,phaseMinAufnahmen,phaseMinR));
+legend(hPhase,{'Kreisfoermiger Phasenmittelwert'},'Location','best','Box','off');
+grid on; box off
+
+PhaseTabelle = table(fGemeinsam,PhaseMittel_deg,PhaseR,PhaseN,PhaseAnzeige, ...
+    'VariableNames',{'Frequenz_Hz','Zirkulaerer_Mittelwert_Grad', ...
+    'R_Phasenkonzentration','N_gueltige_Aufnahmen','Mittelwert_angezeigt'});
+for j = 1:nG
+    PhaseTabelle.(sprintf('Phase_Aufnahme_%d_Grad',j)) = PhaseEinzel_deg(:,j);
+end
+
+%% 10. Einheitlicher Stil und Export
+figuren = [fig1 fig2 fig3 fig4 fig5];
 for j = 1:numel(figuren)
     ax = findall(figuren(j),'Type','axes');
     set(ax,'FontName','Arial','FontSize',10,'LineWidth',0.8, ...
@@ -378,7 +439,8 @@ end
 
 stempel = char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'));
 ziel = fullfile(ordner,['SEP_Auswertung_' stempel]); mkdir(ziel);
-bildnamen = {'01_FFT_gemeinsam','02_Zeitfehler','03_Impulszahlvergleich','04_Aufnahmevergleich'};
+bildnamen = {'01_FFT_gemeinsam','02_Zeitfehler','03_Impulszahlvergleich', ...
+    '04_Aufnahmevergleich','05_Phasenspektrum'};
 for j = 1:numel(figuren)
     exportgraphics(figuren(j),fullfile(ziel,[bildnamen{j} '.png']),'Resolution',300);
     savefig(figuren(j),fullfile(ziel,[bildnamen{j} '.fig']));
@@ -391,8 +453,11 @@ writetable(Impulsvergleich,fullfile(ziel,'05_Impulszahlvergleich.csv'));
 FFT = table(fGemeinsam,mittelP,medianP,'VariableNames', ...
     {'Frequenz_Hz','Mittlere_relative_Leistung','Mediane_relative_Leistung'});
 writetable(FFT,fullfile(ziel,'06_FFT.csv'));
+writetable(PhaseTabelle,fullfile(ziel,'07_Phasenspektrum.csv'));
 save(fullfile(ziel,'SEP_Ergebnisse.mat'),'Qualitaet','ProAufnahme', ...
     'Blockdaten','Statistik','Impulsvergleich','FFT','Spektren', ...
+    'KomplexSpektren','PhaseTabelle','PhaseEinzel_deg', ...
+    'phaseMinLeistung','phaseMinR','phaseMinAufnahmen', ...
     'Impulse','Frequenz','Stim','Pause','Zyklus','Startfehler', ...
     'Datei','schwelle','polaritaet','minAbstand','blockLuecke', ...
     'minImpulse','nBloecke','FsFFT','fSoll','zyklusSoll');
@@ -422,6 +487,17 @@ if fid>=0
         'Grafik 4: Mittel/Median/SD der Aufnahmemittelwerte, nicht aller Einzelimpulse.\n' ...
         'Bei n=1 ist keine Streuung zwischen Aufnahmen bestimmbar.\n' ...
         'Statistik-CSV trennt gepoolte Bloecke und Aufnahmemittelwerte.\n' ...
+        'Grafik 5: Phase der Hann-gefensterten Ereignisfolge in Grad (-180 bis +180).\n' ...
+        'Zeitnull ist der erste erkannte Blockbeginn, separat pro Aufnahme.\n' ...
+        'KEINE Phase gegen ein ideales Signal, keine absolute Startlatenz.\n' ...
+        'Komplexe FFT-Koeffizienten werden auf das gemeinsame Frequenzraster interpoliert.\n' ...
+        'Schwache Anteile werden nur in der Phasendarstellung ausgeblendet; Leistung bleibt unveraendert.\n' ...
+        'Phasen werden kreisfoermig gemittelt, ohne Amplitudengewichtung.\n' ...
+        'R ist die Laenge des mittleren Einheitszeigers, keine Signifikanz oder Konfidenz.\n' ...
+        'R nahe 1: aehnliche Phasen; R nahe 0: keine eindeutige gemeinsame Richtung.\n' ...
+        'Die Darstellungsschwellen sind einstellbar, keine statistischen Nachweisgrenzen.\n' ...
+        'Phasenspruenge bei +/-180 Grad sind normale Winkeldarstellung.\n' ...
+        'Keine Umrechnung der Phasen in eine globale Zeitverschiebung.\n' ...
         'Keine Fallflanken-/Impulsbreitenpruefung in diesem Skript.\n' ...
         'Eine Mindestimpulszahl beweist keinen vollstaendigen Block. Warnungen beachten.\n']);
     fclose(fid);
