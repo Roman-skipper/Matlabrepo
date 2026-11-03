@@ -1,0 +1,488 @@
+%% FFT von vier SEP-Referenzaufnahmen
+% MATLAB R2024a, keine zusätzliche Toolbox erforderlich.
+%
+% Erwartetes Rigol-Format:
+% CH1(V),t0 = -123s, tInc = 1e-05s,
+% Danach Spannung in Spalte 1.
+%
+% Die FFT wird aus erkannten Ereigniszeitpunkten berechnet:
+%   links: alle Impulsanfänge der ausgewählten Blöcke
+%   rechts: die Blockanfänge
+% Es handelt sich NICHT um ein Spannungsspektrum.
+%
+% Die Spektren jeder Aufnahme werden einzeln normiert.
+% Anschließend werden ihre Leistungen gemittelt.
+
+clear; clc; close all;
+
+%% 1. Einstellungen
+
+schwelle_V = 5;           % Für positive Impulse der Referenzaufnahmen
+polaritaet = 1;           % +1: positive Pulse; -1: negative Pulse
+
+minAbstand_s = 0.10;      % Sperrzeit gegen Doppelzählungen
+blockLuecke_s = 2;        % Größere Lücke beginnt neuen Block
+minImpulseBlock = 100;    % Auswahlkriterium, kein Vollständigkeitsbeweis
+anzahlBloecke = 9;
+
+sollFrequenz_Hz = 4.7;
+sollZyklus_s = 60;
+
+% Nur für die Darstellung der Ereignisspektren.
+% Die Impulserkennung erfolgt auf den originalen Samples.
+FsFFT = 100;
+zeroPaddingFaktor = 8;
+
+% Gemeinsame Frequenzachsen zum Mitteln der vier Spektren
+fStim = linspace(3.8, 5.4, 5000)';
+fBlock = linspace(0.005, 0.05, 5000)';
+
+%% 2. Vier Rohdateien auswählen
+
+[dateien, ordner] = uigetfile( ...
+    '*.csv', ...
+    'Vier normale Rigol-Rohaufnahmen auswählen', ...
+    'MultiSelect', 'on');
+
+if isequal(dateien, 0)
+    disp('Abgebrochen.');
+    return
+end
+
+if ischar(dateien)
+    dateien = {dateien};
+end
+
+dateien = dateien(:);
+nDateien = numel(dateien);
+
+if nDateien ~= 4
+    error(['Bitte genau vier Referenzaufnahmen auswählen. ' ...
+           'Ausgewählt wurden %d Dateien.'], nDateien);
+end
+
+%% 3. Speicher vorbereiten
+
+PStim = nan(numel(fStim), nDateien);
+PBlock = nan(numel(fBlock), nDateien);
+
+FrequenzZeit_Hz = nan(nDateien, 1);
+ZyklusMittel_s = nan(nDateien, 1);
+ZyklusMedian_s = nan(nDateien, 1);
+BlockfrequenzZeit_Hz = nan(nDateien, 1);
+
+FFTStimPeak_Hz = nan(nDateien, 1);
+FFTBlockPeak_Hz = nan(nDateien, 1);
+
+BloeckeGefunden = zeros(nDateien, 1);
+BloeckeVerwendet = zeros(nDateien, 1);
+ImpulseVerwendet = zeros(nDateien, 1);
+UngueltigeSamples = zeros(nDateien, 1);
+
+Impulszahlen = nan(nDateien, anzahlBloecke);
+BlockstartsRelativ_s = nan(nDateien, anzahlBloecke);
+Gueltig = false(nDateien, 1);
+
+%% 4. Aufnahmen einzeln auswerten
+
+for m = 1:nDateien
+
+    fprintf('\n--- %s ---\n', dateien{m});
+
+    try
+        pfad = fullfile(ordner, dateien{m});
+        [u, t0, dt] = leseRigol(pfad);
+
+        UngueltigeSamples(m) = sum(~isfinite(u));
+
+        % Fehlende Samples bleiben an ihrer Originalposition.
+        if UngueltigeSamples(m) > 0
+            error(['Die Datei enthält %d ungültige Samples. ' ...
+                   'Für diese einfache FFT-Auswertung wird sie ' ...
+                   'ausgeschlossen; bitte zuerst Datenlücken prüfen.'], ...
+                   UngueltigeSamples(m));
+        end
+
+        fprintf('t0 = %.6f s | tInc = %.9g s\n', t0, dt);
+        fprintf('Spannung: %.3f bis %.3f V\n', min(u), max(u));
+
+        % Vorzeichen umkehren, falls negative Pulse vorliegen.
+        if polaritaet == -1
+            u = -u;
+        elseif polaritaet ~= 1
+            error('polaritaet muss +1 oder -1 sein.');
+        end
+
+        % Schwellenüberschreitungen im originalen Signal
+        high = u > schwelle_V;
+
+        if high(1) || high(end)
+            warning(['%s: Signal am Aufnahmerand über der Schwelle. ' ...
+                     'Möglicherweise angeschnittener Impuls.'], ...
+                     dateien{m});
+        end
+
+        idxRoh = find(~high(1:end-1) & high(2:end)) + 1;
+
+        clear u high
+
+        if isempty(idxRoh)
+            error(['Keine Impulse erkannt. Schwelle und Polarität ' ...
+                   'anhand der Rohaufnahme prüfen.']);
+        end
+
+        % Gegen den zuletzt akzeptierten Impuls prüfen.
+        behalten = false(size(idxRoh));
+        behalten(1) = true;
+        letzter = idxRoh(1);
+
+        for k = 2:numel(idxRoh)
+            if (idxRoh(k) - letzter) * dt >= minAbstand_s
+                behalten(k) = true;
+                letzter = idxRoh(k);
+            end
+        end
+
+        idx = idxRoh(behalten);
+        fprintf('Verworfene nahe Flanken: %d\n', ...
+                sum(~behalten));
+
+        clear idxRoh behalten
+
+        % Relative Zeit vermeidet unnötige große Zeitvektoren.
+        % t0 beeinflusst die Zeitdifferenzen und FFT nicht.
+        p = (idx - 1) * dt;
+        clear idx
+
+        %% Blockkandidaten
+
+        bs = [1; find(diff(p) > blockLuecke_s) + 1];
+        be = [bs(2:end)-1; numel(p)];
+        groesse = be - bs + 1;
+
+        fprintf('Impulszahlen aller Blockkandidaten:\n');
+        disp(groesse');
+
+        kandidaten = find(groesse >= minImpulseBlock);
+        BloeckeGefunden(m) = numel(kandidaten);
+
+        if any(groesse < minImpulseBlock)
+            warning(['%s: Kleine Gruppen werden nicht ausgewertet. ' ...
+                     'Bitte prüfen, ob dies Teilblöcke oder Störungen sind.'], ...
+                     dateien{m});
+        end
+
+        if numel(kandidaten) < anzahlBloecke
+            error('Nur %d geeignete Blockkandidaten statt %d.', ...
+                  numel(kandidaten), anzahlBloecke);
+        end
+
+        if numel(kandidaten) > anzahlBloecke
+            warning(['%s: %d Blockkandidaten gefunden. ' ...
+                     'Die ersten %d werden verwendet.'], ...
+                     dateien{m}, numel(kandidaten), anzahlBloecke);
+        end
+
+        auswahl = kandidaten(1:anzahlBloecke);
+
+        starts = zeros(anzahlBloecke, 1);
+        alleImpulse = [];
+        alleAbstaende = [];
+
+        for b = 1:anzahlBloecke
+
+            j = auswahl(b);
+            q = p(bs(j):be(j));
+
+            starts(b) = q(1);
+            Impulszahlen(m,b) = numel(q);
+
+            alleImpulse = [alleImpulse; q]; %#ok<AGROW>
+            alleAbstaende = [alleAbstaende; diff(q)]; %#ok<AGROW>
+        end
+
+        clear p
+
+        %% Zeitbasierte Kennwerte
+
+        zyklen = diff(starts);
+
+        FrequenzZeit_Hz(m) = 1 / median(alleAbstaende);
+        ZyklusMittel_s(m) = mean(zyklen);
+        ZyklusMedian_s(m) = median(zyklen);
+        BlockfrequenzZeit_Hz(m) = 1 / median(zyklen);
+
+        BloeckeVerwendet(m) = anzahlBloecke;
+        ImpulseVerwendet(m) = numel(alleImpulse);
+
+        ursprung = starts(1);
+        starts = starts - ursprung;
+        alleImpulse = alleImpulse - ursprung;
+
+        BlockstartsRelativ_s(m,:) = starts';
+
+        % Beobachtetes Fenster: erster bis letzter erkannter Impuls.
+        % Keine letzte Pause oder zusätzliche Periode ergänzen.
+        T = alleImpulse(end);
+
+        %% Ereignisspektren
+
+        PStim(:,m) = ereignisSpektrum( ...
+            alleImpulse, T, FsFFT, ...
+            zeroPaddingFaktor, fStim);
+
+        PBlock(:,m) = ereignisSpektrum( ...
+            starts, T, FsFFT, ...
+            zeroPaddingFaktor, fBlock);
+
+        [~, k] = max(PStim(:,m));
+        FFTStimPeak_Hz(m) = fStim(k);
+
+        [~, k] = max(PBlock(:,m));
+        FFTBlockPeak_Hz(m) = fBlock(k);
+
+        Gueltig(m) = true;
+
+        fprintf('Impulszahlen der ausgewählten Blöcke:\n');
+        disp(Impulszahlen(m,:));
+
+        fprintf('Frequenz aus Impulsabständen: %.6f Hz\n', ...
+                FrequenzZeit_Hz(m));
+
+        fprintf('Mittlerer Start-zu-Start-Zyklus: %.6f s\n', ...
+                ZyklusMittel_s(m));
+
+    catch ME
+        warning('Datei %s nicht ausgewertet: %s', ...
+                dateien{m}, ME.message);
+    end
+end
+
+%% 5. Ergebnisse
+
+Ergebnisse = table( ...
+    string(dateien), Gueltig, ...
+    BloeckeGefunden, BloeckeVerwendet, ...
+    ImpulseVerwendet, UngueltigeSamples, ...
+    FrequenzZeit_Hz, ZyklusMittel_s, ZyklusMedian_s, ...
+    BlockfrequenzZeit_Hz, FFTStimPeak_Hz, FFTBlockPeak_Hz, ...
+    'VariableNames', { ...
+    'Datei', 'Gueltig', ...
+    'BloeckeGefunden', 'BloeckeVerwendet', ...
+    'ImpulseVerwendet', 'UngueltigeSamples', ...
+    'Frequenz_Zeit_Hz', 'Zyklus_Mittel_s', 'Zyklus_Median_s', ...
+    'Blockfrequenz_Zeit_Hz', 'FFT_Stim_Peak_Hz', ...
+    'FFT_Block_Peak_Hz'});
+
+disp(Ergebnisse);
+
+if ~any(Gueltig)
+    error('Keine Aufnahme konnte ausgewertet werden.');
+end
+
+%% 6. Spektren mitteln
+% Leistungsspektren mitteln, nicht komplexe FFT-Werte.
+% Dadurch löschen unterschiedliche Phasen die Peaks nicht aus.
+
+mittelStim = mean(PStim(:,Gueltig), 2);
+mittelBlock = mean(PBlock(:,Gueltig), 2);
+
+mittelStim = mittelStim / max(mittelStim);
+mittelBlock = mittelBlock / max(mittelBlock);
+
+[~, iStim] = max(mittelStim);
+[~, iBlock] = max(mittelBlock);
+
+peakStim = fStim(iStim);
+peakBlock = fBlock(iBlock);
+
+%% 7. Schlichte Abbildung
+
+fig = figure( ...
+    'Color', 'w', ...
+    'Name', 'SEP – Frequenzspektren', ...
+    'Position', [100 150 1100 420]);
+
+tiledlayout(1, 2, 'TileSpacing', 'compact', ...
+                   'Padding', 'compact');
+
+blau = [0.10 0.35 0.65];
+grau = [0.55 0.55 0.55];
+
+% Einzelimpulse
+nexttile;
+
+plot(fStim, mittelStim, 'Color', blau, 'LineWidth', 1.8);
+hold on;
+xline(sollFrequenz_Hz, '--', '4,7 Hz Soll', ...
+      'Color', grau, 'LabelVerticalAlignment', 'middle');
+plot(peakStim, 1, 'o', 'Color', blau, ...
+     'MarkerFaceColor', blau, 'MarkerSize', 5);
+
+text(peakStim, 1.06, sprintf('%.4f Hz', peakStim), ...
+     'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+
+xlabel('Frequenz [Hz]');
+ylabel('Normierte spektrale Leistung');
+title('Stimulationsimpulse');
+xlim([4.2 5.0]);
+ylim([0 1.17]);
+grid on;
+box off;
+
+% Blockstarts
+nexttile;
+
+plot(fBlock, mittelBlock, 'Color', blau, 'LineWidth', 1.8);
+hold on;
+xline(1/sollZyklus_s, '--', '1/60 Hz Soll', ...
+      'Color', grau, 'LabelVerticalAlignment', 'middle');
+plot(peakBlock, 1, 'o', 'Color', blau, ...
+     'MarkerFaceColor', blau, 'MarkerSize', 5);
+
+text(peakBlock, 1.06, sprintf('%.5f Hz', peakBlock), ...
+     'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+
+xlabel('Frequenz [Hz]');
+ylabel('Normierte spektrale Leistung');
+title('Wiederholung der Blöcke');
+xlim([0.008 0.026]);
+ylim([0 1.17]);
+grid on;
+box off;
+
+set(findall(fig, 'Type', 'axes'), ...
+    'FontName', 'Arial', 'FontSize', 11, ...
+    'GridAlpha', 0.12);
+
+sgtitle(sprintf('Gemittelte Ereignisspektren – %d Aufnahmen', ...
+        sum(Gueltig)), 'FontWeight', 'normal');
+
+%% 8. Speichern
+
+zeitstempel = char(datetime('now', ...
+                           'Format', 'yyyyMMdd_HHmmss_SSS'));
+ziel = fullfile(ordner, ['SEP_FFT_' zeitstempel]);
+mkdir(ziel);
+
+exportgraphics(fig, fullfile(ziel, 'SEP_FFT.png'), ...
+               'Resolution', 300);
+
+savefig(fig, fullfile(ziel, 'SEP_FFT.fig'));
+writetable(Ergebnisse, fullfile(ziel, 'FFT_Ergebnisse.csv'));
+
+SpektrumStim = table(fStim, mittelStim, ...
+    'VariableNames', {'Frequenz_Hz', 'NormierteLeistung'});
+
+SpektrumBlock = table(fBlock, mittelBlock, ...
+    'VariableNames', {'Frequenz_Hz', 'NormierteLeistung'});
+
+writetable(SpektrumStim, fullfile(ziel, 'Spektrum_Impulse.csv'));
+writetable(SpektrumBlock, fullfile(ziel, 'Spektrum_Bloecke.csv'));
+
+save(fullfile(ziel, 'FFT_Daten.mat'), ...
+    'Ergebnisse', 'Impulszahlen', 'BlockstartsRelativ_s', ...
+    'fStim', 'fBlock', 'PStim', 'PBlock', ...
+    'mittelStim', 'mittelBlock', ...
+    'schwelle_V', 'polaritaet', 'minAbstand_s', ...
+    'blockLuecke_s', 'minImpulseBlock', 'FsFFT');
+
+fprintf('\nErgebnisse gespeichert unter:\n%s\n', ziel);
+fprintf('\nFFT-Peak Einzelimpulse: %.6f Hz\n', peakStim);
+fprintf('FFT-Peak Blockstarts:   %.6f Hz\n', peakBlock);
+fprintf(['Für genaue Zeitangaben die Kennwerte aus den ' ...
+         'Impuls- und Blockabständen verwenden.\n']);
+
+%% Lokale Funktionen
+
+function [u, t0, dt] = leseRigol(pfad)
+
+    fid = fopen(pfad, 'r');
+
+    if fid < 0
+        error('Datei konnte nicht geöffnet werden.');
+    end
+
+    schliessen = onCleanup(@() fclose(fid));
+
+    kopf = fgetl(fid);
+
+    if ~ischar(kopf)
+        error('Datei ist leer.');
+    end
+
+    zahl = '([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)';
+
+    a = regexpi(kopf, ...
+        ['t0\s*=\s*' zahl '\s*s'], 'tokens', 'once');
+
+    b = regexpi(kopf, ...
+        ['t\s*inc\s*=\s*' zahl '\s*s'], 'tokens', 'once');
+
+    if isempty(a) || isempty(b)
+        error(['Rigol-Kopf mit t0 und tInc fehlt. ' ...
+               'Bitte eine Rohdatei mit diesem Format auswählen.']);
+    end
+
+    t0 = str2double(a{1});
+    dt = str2double(b{1});
+
+    if ~isfinite(t0) || ~isfinite(dt) || dt <= 0
+        error('Ungültige Zeitangaben im Dateikopf.');
+    end
+
+    % Rigol-Format: Spannung und zwei weitere/leere CSV-Spalten.
+    % Keine ungültigen Spannungswerte nachträglich löschen.
+    C = textscan(fid, '%f%*[^\n]', ...
+        'Delimiter', ',', 'ReturnOnError', false);
+
+    u = C{1};
+
+    if numel(u) < 2
+        error('Zu wenige Spannungswerte.');
+    end
+end
+
+function P = ereignisSpektrum(zeiten, T, Fs, padding, fZiel)
+
+    if ~isfinite(T) || T <= 0
+        error('Ungültige Beobachtungsdauer.');
+    end
+
+    % Ereignisfolge: An jedem erkannten Beginn steht ein Marker.
+    % 100 Hz dienen hier nur der spektralen Darstellung.
+    n = ceil(T * Fs) + 1;
+
+    idx = round(zeiten * Fs) + 1;
+    idx = idx(idx >= 1 & idx <= n);
+
+    x = accumarray(idx, ones(size(idx)), [n 1], @sum, 0);
+
+    % Hann-Fenster ohne Toolbox.
+    % Reduziert spektrale Nebenkeulen.
+    w = 0.5 - 0.5*cos(2*pi*(0:n-1)'/(n-1));
+
+    % Gewichteten Gleichanteil entfernen.
+    mu = sum(w .* x) / sum(w);
+    x = (x - mu) .* w;
+
+    % Zero-Padding macht die Kurve feiner.
+    % Es erhöht NICHT die physikalische Frequenzauflösung.
+    nFFT = 2^nextpow2(padding * n);
+
+    Y = fft(x, nFFT);
+    k = (0:floor(nFFT/2))';
+
+    f = k * Fs / nFFT;
+    leistung = abs(Y(1:numel(k))).^2;
+
+    P = interp1(f, leistung, fZiel, 'linear', 0);
+
+    maximum = max(P);
+
+    if ~isfinite(maximum) || maximum <= 0
+        error('Kein gültiges Spektrum berechnet.');
+    end
+
+    P = P / maximum;
+end
