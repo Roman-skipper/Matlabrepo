@@ -23,21 +23,57 @@ anzahlBloecke = 9;
 gesamtzeit_s = 540;
 fSoll_Hz = 1/60;
 
-%% 2. MEHRERE RIGOL-DATEIEN AUSWAEHLEN
-[dateien,ordner] = uigetfile('*.csv',...
-    'Mehrere Rigol-CSV-Dateien auswaehlen',...
-    'MultiSelect','on');
+%% 2. ORDNER MIT ALLEN RIGOL-DATEIEN AUSWAEHLEN
+% Keine Mehrfachauswahl notwendig:
+% Einfach den Ordner auswaehlen, in dem alle Roh-CSV-Dateien liegen.
+ordner = uigetdir(pwd,...
+    'Ordner mit allen Rigol-CSV-Aufnahmen auswaehlen');
 
-if isequal(dateien,0)
-    error('Keine Datei ausgewaehlt.');
+if isequal(ordner,0)
+    error('Kein Ordner ausgewaehlt.');
 end
 
-if ischar(dateien)
-    dateien = {dateien};
+inhalt = dir(fullfile(ordner,'*.csv'));
+
+if isempty(inhalt)
+    error('Im ausgewaehlten Ordner wurden keine CSV-Dateien gefunden.');
 end
 
+% Nur echte Rigol-Rohdateien verwenden.
+% Ergebnistabellen ohne tInc werden bereits hier aussortiert.
+dateien = {};
+
+for k = 1:numel(inhalt)
+    pruefpfad = fullfile(ordner,inhalt(k).name);
+    fidPruefung = fopen(pruefpfad,'r');
+
+    if fidPruefung < 0
+        continue
+    end
+
+    ersteZeile = fgetl(fidPruefung);
+    fclose(fidPruefung);
+
+    if ischar(ersteZeile) && ...
+            contains(ersteZeile,'CH1') && ...
+            contains(ersteZeile,'tInc')
+        dateien{end+1} = inhalt(k).name; %#ok<SAGROW>
+    end
+end
+
+if isempty(dateien)
+    error(['Keine Rigol-Rohdatei erkannt. Die erste Zeile muss '...
+           'CH1 und tInc enthalten.']);
+end
+
+dateien = sort(dateien);
 nDateien = numel(dateien);
-fprintf('%d Aufnahme(n) ausgewaehlt.\n',nDateien);
+
+fprintf('\nOrdner: %s\n',ordner);
+fprintf('%d Rigol-Aufnahme(n) automatisch gefunden:\n',nDateien);
+for k = 1:nDateien
+    fprintf('  %d. %s\n',k,dateien{k});
+end
 
 %% 3. SPEICHER VORBEREITEN
 tFFT = (0:1/FsFFT:gesamtzeit_s-1/FsFFT)';
