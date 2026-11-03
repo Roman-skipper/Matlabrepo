@@ -1,316 +1,521 @@
-%% SEP-AUSWERTUNG FUER DIE IMRaD-ARBEIT (MATLAB R2024a)
-% Ein einziges Skript: CSV-Auswahl, Impulserkennung, Blockanalyse,
-% Statistik, 137/138-Vergleich, Fehlerwachstum und Paper-Abbildungen.
+%% SEP-FOURIERANALYSE FUER MEHRERE RIGOL-AUFNAHMEN
+% MATLAB R2024a
+% Mehrere Roh-CSV-Dateien auswaehlen -> einzeln analysieren -> mitteln.
+%
+% Ergebnis:
+% 1. mittlerer zeitlicher 30S/30R-Verlauf,
+% 2. gemitteltes FFT-Spektrum mit Streuung,
+% 3. FFT-Kennwerte jeder Aufnahme,
+% 4. Phasen-/Zeitverschiebung jeder Aufnahme.
 
 clear; clc; close all;
 
-%% SOLLWERTE
-fSoll = 4.7;
-nSoll = 137;
-stimSoll = 30;
-pauseSoll = 30;
-zyklusSoll = 60;
-bloeckeSoll = 9;
-gesamtSoll = 540;
+%% 1. EINSTELLUNGEN
+schwelle_V = 5;
+minPulsabstand_s = 0.10;
+blockTrennung_s = 2;
+minPulseJeBlock = 100;
 
-schwelle = 5;          % Aufnahme auf1: Grundlinie ca. -0,6 V, Pulse bis 20,4 V
-minPulsabstand = 0.10; % Doppelte Flanken/Stoerspitzen unterdruecken
-blockTrennung = 2.0;   % Luecke >2 s trennt Stimulationsbloecke
-minPulseJeBlock = 100; % Kleine Stoergruppen ignorieren
+FsFFT = 4;             % Fuer langsamen 60-s-Blockrhythmus
+FsPulse = 50;          % Fuer schnellen Impulsrhythmus um 4,6-4,7 Hz
+zyklusSoll_s = 60;
+stimSoll_s = 30;
+anzahlBloecke = 9;
+gesamtzeit_s = 540;
+fSoll_Hz = 1/60;
 
-%% DATEIEN AUSWAEHLEN
-[dateien,ordner] = uigetfile('*.csv','Rigol-CSV-Dateien auswaehlen',...
-    'MultiSelect','on');
-if isequal(dateien,0), error('Keine Datei ausgewaehlt.'); end
-if ischar(dateien), dateien={dateien}; end
+%% 2. ORDNER MIT ALLEN RIGOL-DATEIEN AUSWAEHLEN
+% Keine Mehrfachauswahl notwendig:
+% Einfach den Ordner auswaehlen, in dem alle Roh-CSV-Dateien liegen.
+ordner = uigetdir(pwd,...
+    'Ordner mit allen Rigol-CSV-Aufnahmen auswaehlen');
 
-nM = numel(dateien);
-ziel = fullfile(ordner,'SEP_Ergebnisse');
-if ~exist(ziel,'dir'), mkdir(ziel); end
+if isequal(ordner,0)
+    error('Kein Ordner ausgewaehlt.');
+end
 
-Impulse = NaN(nM,bloeckeSoll);
-Frequenz = NaN(nM,bloeckeSoll);
-Breite_ms = NaN(nM,bloeckeSoll);
-Stim = NaN(nM,bloeckeSoll);
-Pause = NaN(nM,bloeckeSoll-1);
-Zyklus = NaN(nM,bloeckeSoll-1);
-Startfehler = NaN(nM,bloeckeSoll);
+inhalt = dir(fullfile(ordner,'*.csv'));
 
-Dauer = NaN(nM,1);
-tIncListe = NaN(nM,1);
-BloeckeGefunden = zeros(nM,1);
-BloeckeVerwendet = zeros(nM,1);
-FehlendeFallflanken = zeros(nM,1);
+if isempty(inhalt)
+    error('Im ausgewaehlten Ordner wurden keine CSV-Dateien gefunden.');
+end
 
-%% DATEIEN AUSWERTEN
-for m=1:nM
-    fprintf('\n--- %s ---\n',dateien{m});
-    fid=fopen(fullfile(ordner,dateien{m}),'r');
-    if fid<0, warning('Datei nicht lesbar.'); continue; end
+% Nur echte Rigol-Rohdateien verwenden.
+% Ergebnistabellen ohne tInc werden bereits hier aussortiert.
+dateien = {};
 
-    kopf=fgetl(fid);
-    a=regexp(kopf,'t0\s*=\s*([-+0-9.eE]+)\s*s','tokens','once');
-    b=regexp(kopf,'tInc\s*=\s*([-+0-9.eE]+)\s*s','tokens','once');
-    if isempty(b)
-        fclose(fid); warning('tInc wurde nicht gefunden.'); continue
+for k = 1:numel(inhalt)
+    pruefpfad = fullfile(ordner,inhalt(k).name);
+    fidPruefung = fopen(pruefpfad,'r');
+
+    if fidPruefung < 0
+        continue
     end
-    tInc=str2double(b{1});
-    if isempty(a), t0=0; else, t0=str2double(a{1}); end
-    tIncListe(m)=tInc;
 
-    % Nur die erste Spalte lesen; die zwei leeren Spalten ignorieren.
-    C=textscan(fid,'%f%*[^\n]','Delimiter',',','ReturnOnError',false);
+    ersteZeile = fgetl(fidPruefung);
+    fclose(fidPruefung);
+
+    if ischar(ersteZeile) && ...
+            contains(ersteZeile,'CH1') && ...
+            contains(ersteZeile,'tInc')
+        dateien{end+1} = inhalt(k).name; %#ok<SAGROW>
+    end
+end
+
+if isempty(dateien)
+    error(['Keine Rigol-Rohdatei erkannt. Die erste Zeile muss '...
+           'CH1 und tInc enthalten.']);
+end
+
+dateien = sort(dateien);
+nDateien = numel(dateien);
+
+fprintf('\nOrdner: %s\n',ordner);
+fprintf('%d Rigol-Aufnahme(n) automatisch gefunden:\n',nDateien);
+for k = 1:nDateien
+    fprintf('  %d. %s\n',k,dateien{k});
+end
+
+%% 3. SPEICHER VORBEREITEN
+tFFT = (0:1/FsFFT:gesamtzeit_s-1/FsFFT)';
+N = numel(tFFT);
+f = FsFFT*(0:floor(N/2))/N;
+
+tPulse = (0:1/FsPulse:gesamtzeit_s-1/FsPulse)';
+NPulse = numel(tPulse);
+fPulse = FsPulse*(0:floor(NPulse/2))/NPulse;
+
+Signale = NaN(N,nDateien);
+Spektren = NaN(numel(f),nDateien);
+PulsSpektren = NaN(numel(fPulse),nDateien);
+
+BloeckeGefunden = zeros(nDateien,1);
+FrequenzImpulse_Hz = NaN(nDateien,1);
+ZyklusMittel_s = NaN(nDateien,1);
+Blockpeak_Hz = NaN(nDateien,1);
+ZyklusFFT_s = NaN(nDateien,1);
+Phase_Grad = NaN(nDateien,1);
+Zeitverschiebung_s = NaN(nDateien,1);
+Gueltig = false(nDateien,1);
+
+ImpulseJeBlock = NaN(nDateien,anzahlBloecke);
+StimdauerJeBlock = NaN(nDateien,anzahlBloecke);
+PauseJeBlock = NaN(nDateien,anzahlBloecke-1);
+ZyklusJeBlock = NaN(nDateien,anzahlBloecke-1);
+StartfehlerJeBlock = NaN(nDateien,anzahlBloecke);
+
+%% 4. IDEALES 30S/30R-SIGNAL
+ideal = zeros(N,1);
+for b = 1:anzahlBloecke
+    startIdeal = (b-1)*zyklusSoll_s;
+    ideal(tFFT>=startIdeal & tFFT<startIdeal+stimSoll_s) = 1;
+end
+
+xIdeal = ideal-mean(ideal);
+YIdeal = fft(xIdeal);
+AIdeal = abs(YIdeal/N);
+AIdeal = AIdeal(1:floor(N/2)+1);
+AIdeal(2:end-1) = 2*AIdeal(2:end-1);
+
+[~,idxSoll] = min(abs(f-fSoll_Hz));
+phaseIdeal = angle(YIdeal(idxSoll));
+
+%% 5. JEDE ROHAUFNAHME EINZELN AUSWERTEN
+for m = 1:nDateien
+    fprintf('\n========================================\n');
+    fprintf('Aufnahme %d/%d: %s\n',m,nDateien,dateien{m});
+    fprintf('========================================\n');
+
+    fid = fopen(fullfile(ordner,dateien{m}),'r');
+    if fid<0
+        warning('Datei konnte nicht geoeffnet werden.');
+        continue
+    end
+
+    kopf = fgetl(fid);
+    t0Text = regexp(kopf,'t0\s*=\s*([-+0-9.eE]+)\s*s',...
+        'tokens','once');
+    tIncText = regexp(kopf,'tInc\s*=\s*([-+0-9.eE]+)\s*s',...
+        'tokens','once');
+
+    if isempty(tIncText)
+        fclose(fid);
+        warning('tInc wurde nicht gefunden.');
+        continue
+    end
+
+    tInc = str2double(tIncText{1});
+    if isempty(t0Text)
+        t0 = 0;
+    else
+        t0 = str2double(t0Text{1});
+    end
+
+    % Nur erste CSV-Spalte lesen.
+    C = textscan(fid,'%f%*[^\n]',...
+        'Delimiter',',','ReturnOnError',false);
     fclose(fid);
-    u=C{1}; u=u(isfinite(u));
-    if isempty(u), warning('Keine Messwerte gefunden.'); continue; end
 
-    Dauer(m)=(numel(u)-1)*tInc;
-    fprintf('Messwerte: %d | Dauer: %.3f s | Bereich: %.3f bis %.3f V\n',...
-        numel(u),Dauer(m),min(u),max(u));
+    u = C{1};
+    u = u(isfinite(u));
 
-    % Steigende und fallende 5-V-Flanken.
-    high=u>schwelle;
-    sIdx=find(~high(1:end-1) & high(2:end))+1;
-    eIdx=find( high(1:end-1) & ~high(2:end))+1;
-
-    % Starts, die unrealistisch dicht liegen, entfernen.
-    if ~isempty(sIdx)
-        sIdx=sIdx([true;diff(sIdx)*tInc>=minPulsabstand]);
+    if isempty(u)
+        warning('Keine Messwerte gefunden.');
+        continue
     end
 
-    % Zu jedem Start die naechste fallende Flanke suchen.
-    breite=NaN(size(sIdx)); j=1;
-    for k=1:numel(sIdx)
-        while j<=numel(eIdx) && eIdx(j)<=sIdx(k), j=j+1; end
-        if j<=numel(eIdx), breite(k)=(eIdx(j)-sIdx(k))*tInc; end
-    end
-    FehlendeFallflanken(m)=sum(~isfinite(breite));
+    %% Steigende Flanken erkennen
+    high = u>schwelle_V;
+    startIdx = find(~high(1:end-1) & high(2:end))+1;
 
-    pZeit=t0+(sIdx-1)*tInc;
-    if numel(pZeit)<2
-        warning('Zu wenige Pulse erkannt.'); clear u high C; continue
+    if isempty(startIdx)
+        warning('Keine Pulse ueber %.1f V erkannt.',schwelle_V);
+        clear u high C
+        continue
     end
 
-    % Blockgrenzen aus langen Luecken bilden.
-    bs=[1;find(diff(pZeit)>blockTrennung)+1];
-    be=[bs(2:end)-1;numel(pZeit)];
-    groesse=be-bs+1;
-    gut=groesse>=minPulseJeBlock;
-    bs=bs(gut); be=be(gut);
+    % Sehr dicht folgende Starts als Stoerung entfernen.
+    behalten = [true;diff(startIdx)*tInc>=minPulsabstand_s];
+    startIdx = startIdx(behalten);
+    pulszeit = t0+(startIdx-1)*tInc;
 
-    BloeckeGefunden(m)=numel(bs);
-    nB=min(numel(bs),bloeckeSoll);
-    BloeckeVerwendet(m)=nB;
-    if nB<9, warning('Nur %d statt 9 Bloecke erkannt.',nB); end
-    if numel(bs)>9
-        fprintf('%d Bloecke gefunden; die ersten 9 werden ausgewertet.\n',numel(bs));
+    %% Stimulationsbloecke erkennen
+    blockStartPos = [1;find(diff(pulszeit)>blockTrennung_s)+1];
+    blockEndPos = [blockStartPos(2:end)-1;numel(pulszeit)];
+    blockGroesse = blockEndPos-blockStartPos+1;
+
+    gueltigeBloecke = blockGroesse>=minPulseJeBlock;
+    blockStartPos = blockStartPos(gueltigeBloecke);
+    blockEndPos = blockEndPos(gueltigeBloecke);
+
+    BloeckeGefunden(m) = numel(blockStartPos);
+
+    if numel(blockStartPos)<anzahlBloecke
+        warning('Nur %d statt 9 Bloecke erkannt.',...
+            numel(blockStartPos));
+        clear u high C startIdx pulszeit
+        continue
     end
 
-    blockStart=NaN(1,nB);
-    blockEnde=NaN(1,nB);
+    % Es werden bewusst die ersten neun vollstaendigen Bloecke verwendet.
+    blockStartPos = blockStartPos(1:anzahlBloecke);
+    blockEndPos = blockEndPos(1:anzahlBloecke);
 
-    for q=1:nB
-        pos=bs(q):be(q);
-        p=pZeit(pos);
-        dt=diff(p);
-        dt=dt(dt>=minPulsabstand & dt<blockTrennung);
+    blockStart = NaN(1,anzahlBloecke);
+    blockDauer = NaN(1,anzahlBloecke);
+    impulsFreqBlock = NaN(1,anzahlBloecke);
 
-        Impulse(m,q)=numel(p);
-        blockStart(q)=p(1);
+    for b = 1:anzahlBloecke
+        p = pulszeit(blockStartPos(b):blockEndPos(b));
+        dt = diff(p);
+        dt = dt(dt>=minPulsabstand_s & dt<blockTrennung_s);
+
+        blockStart(b) = p(1);
+        ImpulseJeBlock(m,b) = numel(p);
+
         if ~isempty(dt)
-            periode=median(dt);
-            Frequenz(m,q)=1/periode;
-            % N Pulse entsprechen N Perioden des Stimulationsprogramms.
-            Stim(m,q)=p(end)-p(1)+periode;
-            blockEnde(q)=blockStart(q)+Stim(m,q);
-        end
-        w=breite(pos); w=w(isfinite(w) & w>0);
-        if ~isempty(w), Breite_ms(m,q)=1000*median(w); end
-    end
-
-    if nB>=2
-        Zyklus(m,1:nB-1)=diff(blockStart);          % direkt gemessen
-        Pause(m,1:nB-1)=blockStart(2:end)-blockEnde(1:end-1);
-    end
-    if nB>=1
-        ideal=blockStart(1)+(0:nB-1)*zyklusSoll;
-        Startfehler(m,1:nB)=blockStart-ideal;
-    end
-
-    fprintf('Bloecke: %d | Impulse je Block: ',numel(bs));
-    fprintf('%g ',Impulse(m,1:nB)); fprintf('\n');
-    clear u high C sIdx eIdx breite pZeit
-end
-
-%% WERTE ZUSAMMENFASSEN
-alleImpulse=Impulse(isfinite(Impulse));
-alleF=Frequenz(isfinite(Frequenz));
-alleW=Breite_ms(isfinite(Breite_ms));
-alleStim=Stim(isfinite(Stim));
-allePause=Pause(isfinite(Pause));
-alleZ=Zyklus(isfinite(Zyklus));
-
-% 540 s koennen ohne Endmarker nicht direkt gemessen werden.
-% Darum werden 9 Zyklen aus dem Median der 8 direkt gemessenen Zyklen hochgerechnet.
-GesamtHochgerechnet=NaN(nM,1);
-for m=1:nM
-    x=Zyklus(m,isfinite(Zyklus(m,:)));
-    if numel(x)==8, GesamtHochgerechnet(m)=9*median(x); end
-end
-
-Datei=string(dateien(:));
-Qualitaet=table(Datei,Dauer,tIncListe,BloeckeGefunden,BloeckeVerwendet,...
-    FehlendeFallflanken);
-
-Frequenz_Mittel_Hz=mean(Frequenz,2,'omitnan');
-Frequenz_Median_Hz=median(Frequenz,2,'omitnan');
-Impulse_Mittel=mean(Impulse,2,'omitnan');
-Breite_Median_ms=median(Breite_ms,2,'omitnan');
-Stim_Mittel_s=mean(Stim,2,'omitnan');
-Stim_Median_s=median(Stim,2,'omitnan');
-Pause_Mittel_s=mean(Pause,2,'omitnan');
-Pause_Median_s=median(Pause,2,'omitnan');
-Zyklus_Mittel_s=mean(Zyklus,2,'omitnan');
-Zyklus_Median_s=median(Zyklus,2,'omitnan');
-Fehler_Block9_s=Startfehler(:,9);
-Fehler_zu_540s_s=GesamtHochgerechnet-gesamtSoll;
-
-ProMessung=table(Datei,Frequenz_Mittel_Hz,Frequenz_Median_Hz,...
-    Impulse_Mittel,Breite_Median_ms,Stim_Mittel_s,Stim_Median_s,...
-    Pause_Mittel_s,Pause_Median_s,Zyklus_Mittel_s,Zyklus_Median_s,...
-    Fehler_Block9_s,GesamtHochgerechnet,Fehler_zu_540s_s);
-
-%% BLOCKTABELLE
-Blockdaten=table;
-for m=1:nM
-    for q=1:bloeckeSoll
-        if isfinite(Impulse(m,q))
-            ps=NaN; zy=NaN;
-            if q<9, ps=Pause(m,q); zy=Zyklus(m,q); end
-            z=table(string(dateien{m}),m,q,Impulse(m,q),Frequenz(m,q),...
-                Breite_ms(m,q),Stim(m,q),ps,zy,Startfehler(m,q),...
-                'VariableNames',{'Datei','Messung','Block','Impulse',...
-                'Frequenz_Hz','Impulsbreite_ms','Stimulation_s',...
-                'Pause_s','Zyklus_s','Startfehler_s'});
-            Blockdaten=[Blockdaten;z]; %#ok<AGROW>
+            periode = median(dt);
+            impulsFreqBlock(b) = 1/periode;
+            blockDauer(b) = p(end)-p(1)+periode;
         end
     end
-end
 
-%% GESAMTSTATISTIK FUER RESULTS-KAPITEL
-Parameter=["Frequenz";"Impulszahl";"Impulsbreite";"Stimulation";...
-    "Pause";"Zyklus";"Gesamtdauer hochgerechnet";"Startfehler Block 9"];
-Einheit=["Hz";"Impulse";"ms";"s";"s";"s";"s";"s"];
-Werte={alleF;alleImpulse;alleW;alleStim;allePause;alleZ;...
-    GesamtHochgerechnet(isfinite(GesamtHochgerechnet));...
-    Fehler_Block9_s(isfinite(Fehler_Block9_s))};
-Soll=[fSoll;nSoll;NaN;stimSoll;pauseSoll;zyklusSoll;gesamtSoll;0];
-
-N=zeros(8,1); Mittelwert=NaN(8,1); Median=NaN(8,1);
-SD=NaN(8,1); Minimum=NaN(8,1); Maximum=NaN(8,1);
-Differenz=NaN(8,1); RelativProzent=NaN(8,1);
-for k=1:8
-    x=Werte{k}; x=x(isfinite(x)); N(k)=numel(x);
-    if ~isempty(x)
-        Mittelwert(k)=mean(x); Median(k)=median(x); SD(k)=std(x);
-        Minimum(k)=min(x); Maximum(k)=max(x);
-        if isfinite(Soll(k))
-            Differenz(k)=Mittelwert(k)-Soll(k);
-            if Soll(k)~=0, RelativProzent(k)=100*Differenz(k)/Soll(k); end
-        end
+    if any(~isfinite(blockDauer))
+        warning('Mindestens eine Blockdauer konnte nicht bestimmt werden.');
+        clear u high C startIdx pulszeit
+        continue
     end
+
+    FrequenzImpulse_Hz(m) = mean(impulsFreqBlock,'omitnan');
+    ZyklusMittel_s(m) = mean(diff(blockStart),'omitnan');
+    StimdauerJeBlock(m,:) = blockDauer;
+    ZyklusJeBlock(m,:) = diff(blockStart);
+    PauseJeBlock(m,:) = diff(blockStart)-blockDauer(1:end-1);
+    StartfehlerJeBlock(m,:) = ...
+        blockStart-(blockStart(1)+(0:anzahlBloecke-1)*zyklusSoll_s);
+
+    %% Auf den Beginn des ersten Blocks ausrichten
+    blockStartRelativ = blockStart-blockStart(1);
+
+    signal = zeros(N,1);
+    for b = 1:anzahlBloecke
+        anfang = blockStartRelativ(b);
+        ende = anfang+blockDauer(b);
+        signal(tFFT>=anfang & tFFT<ende) = 1;
+    end
+
+    Signale(:,m) = signal;
+
+    %% Impulszug fuer das schnelle Spektrum um 4,6-4,7 Hz
+    % Die Pulse werden als kurze Ereignisse dargestellt. Fuer die
+    % Wiederholungsfrequenz ist ihre genaue Pulsbreite nicht erforderlich.
+    pulsRelativ = pulszeit-blockStart(1);
+    pulsRelativ = pulsRelativ(pulsRelativ>=0 & ...
+        pulsRelativ<gesamtzeit_s);
+
+    pulsSignal = zeros(NPulse,1);
+    pulsPosition = round(pulsRelativ*FsPulse)+1;
+    pulsPosition = pulsPosition(pulsPosition>=1 & ...
+        pulsPosition<=NPulse);
+    pulsSignal(unique(pulsPosition)) = 1;
+
+    xPuls = pulsSignal-mean(pulsSignal);
+    YPuls = fft(xPuls);
+    APuls = abs(YPuls/NPulse);
+    APuls = APuls(1:floor(NPulse/2)+1);
+    APuls(2:end-1) = 2*APuls(2:end-1);
+    PulsSpektren(:,m) = APuls;
+
+    %% FFT der einzelnen Aufnahme
+    x = signal-mean(signal);
+    Y = fft(x);
+
+    A = abs(Y/N);
+    A = A(1:floor(N/2)+1);
+    A(2:end-1) = 2*A(2:end-1);
+    Spektren(:,m) = A;
+
+    % Hauptpeak nur im Bereich der langsamen Blockfrequenz suchen.
+    suchbereich = f>=0.010 & f<=0.025;
+    idxBereich = find(suchbereich);
+    [~,lokal] = max(A(suchbereich));
+    idxPeak = idxBereich(lokal);
+
+    Blockpeak_Hz(m) = f(idxPeak);
+    ZyklusFFT_s(m) = 1/f(idxPeak);
+
+    deltaPhase = angle(exp(1i*(angle(Y(idxSoll))-phaseIdeal)));
+    Phase_Grad(m) = rad2deg(deltaPhase);
+    Zeitverschiebung_s(m) = deltaPhase/(2*pi*f(idxSoll));
+
+    Gueltig(m) = true;
+
+    fprintf('Bloecke erkannt: %d\n',BloeckeGefunden(m));
+    fprintf('Impulsfrequenz: %.4f Hz\n',FrequenzImpulse_Hz(m));
+    fprintf('Mittlere Zyklusdauer: %.4f s\n',ZyklusMittel_s(m));
+    fprintf('FFT-Blockpeak: %.6f Hz\n',Blockpeak_Hz(m));
+    fprintf('Zyklus aus FFT: %.3f s\n',ZyklusFFT_s(m));
+    fprintf('Phasenverschiebung: %.3f Grad = %.3f s\n',...
+        Phase_Grad(m),Zeitverschiebung_s(m));
+
+    clear u high C startIdx pulszeit
 end
-Gesamtstatistik=table(Parameter,Einheit,N,Soll,Mittelwert,Median,SD,...
-    Minimum,Maximum,Differenz,RelativProzent);
 
-%% VERGLEICH NACH IMPULSZAHL, Z.B. 137 GEGEN 138
-Gruppen=unique(alleImpulse);
-Impulsvergleich=table;
-for k=1:numel(Gruppen)
-    G=Gruppen(k);
-    mb=Impulse==G;
-    s=Stim(mb); s=s(isfinite(s));
-    f=Frequenz(mb); f=f(isfinite(f));
-    w=Breite_ms(mb); w=w(isfinite(w));
-
-    mu=Impulse(:,1:end-1)==G;
-    p=Pause(mu); p=p(isfinite(p));
-    z=Zyklus(mu); z=z(isfinite(z));
-
-    neu=table(G,numel(s),mean(f,'omitnan'),mean(w,'omitnan'),...
-        mean(s,'omitnan'),median(s,'omitnan'),std(s,'omitnan'),...
-        mean(p,'omitnan'),median(p,'omitnan'),std(p,'omitnan'),...
-        mean(z,'omitnan'),median(z,'omitnan'),std(z,'omitnan'),...
-        'VariableNames',{'Impulse','N_Bloecke','Frequenz_Mittel_Hz',...
-        'Breite_Mittel_ms','Stim_Mittel_s','Stim_Median_s','Stim_SD_s',...
-        'Pause_Mittel_s','Pause_Median_s','Pause_SD_s',...
-        'Zyklus_Mittel_s','Zyklus_Median_s','Zyklus_SD_s'});
-    Impulsvergleich=[Impulsvergleich;neu]; %#ok<AGROW>
+%% 6. NUR GUELTIGE AUFNAHMEN BEHALTEN
+if ~any(Gueltig)
+    error(['Keine Aufnahme konnte vollstaendig ausgewertet werden. '...
+           'Pruefe Schwelle und Blockerkennung.']);
 end
 
-%% AUSGABE UND CSV-TABELLEN
-disp('=== QUALITAET ==='); disp(Qualitaet);
-disp('=== PRO MESSUNG ==='); disp(ProMessung);
-disp('=== GESAMTSTATISTIK ==='); disp(Gesamtstatistik);
-disp('=== IMPULSZAHLVERGLEICH ==='); disp(Impulsvergleich);
+Datei = string(dateien(:));
 
-writetable(Qualitaet,fullfile(ziel,'01_Qualitaet.csv'));
-writetable(ProMessung,fullfile(ziel,'02_Pro_Messung.csv'));
-writetable(Blockdaten,fullfile(ziel,'03_Blockdaten.csv'));
-writetable(Gesamtstatistik,fullfile(ziel,'04_Gesamtstatistik.csv'));
-writetable(Impulsvergleich,fullfile(ziel,'05_Impulszahlvergleich.csv'));
+Datei = Datei(Gueltig);
+Signale = Signale(:,Gueltig);
+Spektren = Spektren(:,Gueltig);
+PulsSpektren = PulsSpektren(:,Gueltig);
+BloeckeGefunden = BloeckeGefunden(Gueltig);
+FrequenzImpulse_Hz = FrequenzImpulse_Hz(Gueltig);
+ZyklusMittel_s = ZyklusMittel_s(Gueltig);
+Blockpeak_Hz = Blockpeak_Hz(Gueltig);
+ZyklusFFT_s = ZyklusFFT_s(Gueltig);
+Phase_Grad = Phase_Grad(Gueltig);
+Zeitverschiebung_s = Zeitverschiebung_s(Gueltig);
+ImpulseJeBlock = ImpulseJeBlock(Gueltig,:);
+StimdauerJeBlock = StimdauerJeBlock(Gueltig,:);
+PauseJeBlock = PauseJeBlock(Gueltig,:);
+ZyklusJeBlock = ZyklusJeBlock(Gueltig,:);
+StartfehlerJeBlock = StartfehlerJeBlock(Gueltig,:);
 
-%% ABBILDUNG 1: GESAMTVERTEILUNGEN
-f1=figure('Color','w');
-tiledlayout(2,2,'TileSpacing','compact');
-nexttile; boxchart(alleStim); yline(30,'r--'); ylabel('Stimulation [s]'); grid on
-nexttile; boxchart(allePause); yline(30,'r--'); ylabel('Pause [s]'); grid on
-nexttile; boxchart(alleZ); yline(60,'r--'); ylabel('Zyklus [s]'); grid on
-nexttile; boxchart(alleF); yline(4.7,'r--'); ylabel('Frequenz [Hz]'); grid on
-sgtitle('Gesamtergebnis aller Messungen');
-exportgraphics(f1,fullfile(ziel,'Abb1_Gesamtverteilungen.png'),'Resolution',300);
+nGueltig = sum(Gueltig);
 
-%% ABBILDUNG 2: 137/138 UND ANDERE IMPULSZAHLEN
-f2=figure('Color','w');
-tiledlayout(1,3,'TileSpacing','compact');
+mittelSignal = mean(Signale,2);
+mittelSpektrum = mean(Spektren,2);
+sdSpektrum = std(Spektren,0,2);
+mittelPulsSpektrum = mean(PulsSpektren,2);
+
+%% 7. GEMITTELTEN HAUPTPEAK BESTIMMEN
+suchbereich = f>=0.010 & f<=0.025;
+idxBereich = find(suchbereich);
+[~,lokal] = max(mittelSpektrum(suchbereich));
+idxMittelPeak = idxBereich(lokal);
+
+mittelPeak_Hz = f(idxMittelPeak);
+mittelZyklusFFT_s = 1/mittelPeak_Hz;
+
+% Stimulationsfrequenz im erwarteten Bereich suchen
+suchPuls = fPulse>=4.0 & fPulse<=5.2;
+idxPulsBereich = find(suchPuls);
+[~,lokalPuls] = max(mittelPulsSpektrum(suchPuls));
+idxPulsPeak = idxPulsBereich(lokalPuls);
+pulsPeak_Hz = fPulse(idxPulsPeak);
+
+fprintf('\n========================================\n');
+fprintf('GESAMTERGEBNIS AUS %d AUFNAHMEN\n',nGueltig);
+fprintf('========================================\n');
+fprintf('Soll-Blockfrequenz: %.6f Hz\n',fSoll_Hz);
+fprintf('Gemittelter FFT-Peak: %.6f Hz\n',mittelPeak_Hz);
+fprintf('Zyklus aus gemittelter FFT: %.3f s\n',...
+    mittelZyklusFFT_s);
+fprintf('FFT-Peak der Stimulationsimpulse: %.4f Hz\n',...
+    pulsPeak_Hz);
+fprintf('Mittlere direkte Zyklusdauer: %.3f s\n',...
+    mean(ZyklusMittel_s));
+fprintf('Mittlere Impulsfrequenz: %.4f Hz\n',...
+    mean(FrequenzImpulse_Hz));
+fprintf('Mittlere Zeitverschiebung: %.3f +/- %.3f s\n',...
+    mean(Zeitverschiebung_s),std(Zeitverschiebung_s));
+
+%% 8. ERGEBNISTABELLEN
+ProAufnahme = table(Datei,BloeckeGefunden,FrequenzImpulse_Hz,...
+    ZyklusMittel_s,Blockpeak_Hz,ZyklusFFT_s,...
+    Phase_Grad,Zeitverschiebung_s);
+
+Gesamt = table(nGueltig,fSoll_Hz,mittelPeak_Hz,...
+    mittelZyklusFFT_s,pulsPeak_Hz,mean(ZyklusMittel_s),...
+    std(ZyklusMittel_s),mean(FrequenzImpulse_Hz),...
+    mean(Zeitverschiebung_s),std(Zeitverschiebung_s),...
+    'VariableNames',{'N_Aufnahmen','Soll_Blockfrequenz_Hz',...
+    'FFT_Peak_gemittelt_Hz','Zyklus_aus_FFT_s',...
+    'FFT_Impulspeak_Hz',...
+    'Zyklus_direkt_Mittel_s','Zyklus_direkt_SD_s',...
+    'Impulsfrequenz_Mittel_Hz',...
+    'Zeitverschiebung_Mittel_s','Zeitverschiebung_SD_s'});
+
+disp('=== PRO AUFNAHME ===');
+disp(ProAufnahme);
+disp('=== GEMITTELTES ERGEBNIS ===');
+disp(Gesamt);
+
+%% 9. ABBILDUNG 1: SCHLICHTES FFT-IMPULSSPEKTRUM
+fig1 = figure('Color','w','Position',[150 150 850 500]);
+plot(fPulse,mittelPulsSpektrum,...
+    'Color',[0.10 0.35 0.75],'LineWidth',1.8);
+hold on
+xline(4.7,'r--','Soll 4,7 Hz','LineWidth',1.3);
+plot(pulsPeak_Hz,mittelPulsSpektrum(idxPulsPeak),...
+    'ro','MarkerFaceColor','r','MarkerSize',7);
+xlim([4.0 5.2]);
+xlabel('Frequenz [Hz]');
+ylabel('Amplitude');
+title(sprintf('FFT-Impulsspektrum: Hauptpeak %.4f Hz',pulsPeak_Hz));
+legend('Gemitteltes Spektrum','Sollfrequenz','Hauptpeak',...
+    'Location','best');
+grid on
+box on
+
+%% 10. ABBILDUNG 2: ZEITFEHLER UEBER NEUN WIEDERHOLUNGEN
+fig2 = figure('Color','w','Position',[150 150 850 500]);
+block = 1:anzahlBloecke;
+fehlerMittel = mean(StartfehlerJeBlock,1,'omitnan');
+fehlerSD = std(StartfehlerJeBlock,0,1,'omitnan');
+errorbar(block,fehlerMittel,fehlerSD,'o-',...
+    'Color',[0.10 0.45 0.70],...
+    'MarkerFaceColor',[0.10 0.45 0.70],...
+    'LineWidth',1.6,'CapSize',8);
+hold on
+yline(0,'k--','Idealer Zeitpunkt');
+xlabel('Stimulationsblock');
+ylabel('Zeitfehler [s]');
+title('Zeitfehler über neun Wiederholungen');
+xticks(1:9);
+grid on
+box on
+
+%% 11. ABBILDUNG 3: EINFLUSS DER ERKANNTEN IMPULSZAHL
+fig3 = figure('Color','w','Position',[100 120 1100 420]);
+layout3 = tiledlayout(1,3,'TileSpacing','compact','Padding','compact');
+
+impulseAlle = ImpulseJeBlock(:);
+stimAlle = StimdauerJeBlock(:);
+
 nexttile
-boxchart(categorical(Impulse(isfinite(Stim))),Stim(isfinite(Stim)));
-yline(30,'r--'); xlabel('Impulse'); ylabel('Stimulation [s]'); grid on
-U=Impulse(:,1:end-1);
+maske = isfinite(impulseAlle) & isfinite(stimAlle);
+boxchart(categorical(impulseAlle(maske)),stimAlle(maske),...
+    'BoxFaceColor',[0.20 0.55 0.80]);
+yline(30,'r--','Soll 30 s');
+xlabel('Erkannte Impulse');
+ylabel('Stimulationsdauer [s]');
+title('Stimulation');
+grid on
+
+impulseUebergang = ImpulseJeBlock(:,1:end-1);
+
 nexttile
-maske=isfinite(Pause)&isfinite(U);
-boxchart(categorical(U(maske)),Pause(maske));
-yline(30,'r--'); xlabel('Impulse im Block'); ylabel('Pause [s]'); grid on
+maske = isfinite(impulseUebergang) & isfinite(PauseJeBlock);
+boxchart(categorical(impulseUebergang(maske)),PauseJeBlock(maske),...
+    'BoxFaceColor',[0.20 0.65 0.45]);
+yline(30,'r--','Soll 30 s');
+xlabel('Impulse im vorherigen Block');
+ylabel('Pausendauer [s]');
+title('Pause');
+grid on
+
 nexttile
-maske=isfinite(Zyklus)&isfinite(U);
-boxchart(categorical(U(maske)),Zyklus(maske));
-yline(60,'r--'); xlabel('Impulse im Block'); ylabel('Zyklus [s]'); grid on
-sgtitle('Einfluss der erkannten Impulszahl');
-exportgraphics(f2,fullfile(ziel,'Abb2_Impulszahl.png'),'Resolution',300);
+maske = isfinite(impulseUebergang) & isfinite(ZyklusJeBlock);
+boxchart(categorical(impulseUebergang(maske)),ZyklusJeBlock(maske),...
+    'BoxFaceColor',[0.65 0.40 0.75]);
+yline(60,'r--','Soll 60 s');
+xlabel('Impulse im vorherigen Block');
+ylabel('Zyklusdauer [s]');
+title('Gesamtzyklus');
+grid on
 
-%% ABBILDUNG 3: FEHLERWACHSTUM UEBER 9 BLOCKSTARTS
-f3=figure('Color','w');
-x=1:9;
-med=median(Startfehler,1,'omitnan');
-lo=min(Startfehler,[],1,'omitnan');
-hi=max(Startfehler,[],1,'omitnan');
-errorbar(x,med,med-lo,hi-med,'o-','LineWidth',1.5);
-yline(0,'r--','Soll'); grid on; xticks(1:9)
-xlabel('Block'); ylabel('Startfehler [s]');
-title('Zeitfehler: Median und Spannweite aller Messungen');
-exportgraphics(f3,fullfile(ziel,'Abb3_Fehlerwachstum.png'),'Resolution',300);
+title(layout3,'Einfluss der erkannten Impulszahl');
 
-%% ABBILDUNG 4: REPRODUZIERBARKEIT
-f4=figure('Color','w');
-tiledlayout(2,2,'TileSpacing','compact');
-nexttile; bar(Frequenz_Mittel_Hz); yline(4.7,'r--'); ylabel('Hz'); title('Frequenz'); grid on
-nexttile; bar(Stim_Mittel_s); yline(30,'r--'); ylabel('s'); title('Stimulation'); grid on
-nexttile; bar(Pause_Mittel_s); yline(30,'r--'); ylabel('s'); title('Pause'); grid on
-nexttile; bar(Zyklus_Mittel_s); yline(60,'r--'); ylabel('s'); title('Zyklus'); grid on
-sgtitle('Reproduzierbarkeit der Messungen');
-exportgraphics(f4,fullfile(ziel,'Abb4_Reproduzierbarkeit.png'),'Resolution',300);
+%% 12. ABBILDUNG 4: GESAMTERGEBNIS ALLER MESSUNGEN
+fig4 = figure('Color','w','Position',[100 80 1000 700]);
+layout4 = tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
 
-save(fullfile(ziel,'SEP_komplette_Auswertung.mat'));
-fprintf('\nFERTIG. Ergebnisse gespeichert in:\n%s\n',ziel);
-fprintf(['Wichtig: Der Fehler bis zum Start von Block 9 ist direkt gemessen.\n'...
-    'Die Gesamtdauer von 9 Zyklen wurde hochgerechnet, weil kein Endmarker vorliegt.\n']);
+nexttile
+boxchart(FrequenzImpulse_Hz,'BoxFaceColor',[0.15 0.45 0.75]);
+yline(4.7,'r--','Soll 4,7 Hz');
+ylabel('Frequenz [Hz]');
+title('Impulsfrequenz');
+grid on
+
+nexttile
+boxchart(StimdauerJeBlock(:),'BoxFaceColor',[0.20 0.55 0.80]);
+yline(30,'r--','Soll 30 s');
+ylabel('Dauer [s]');
+title('Stimulation');
+grid on
+
+nexttile
+boxchart(PauseJeBlock(:),'BoxFaceColor',[0.20 0.65 0.45]);
+yline(30,'r--','Soll 30 s');
+ylabel('Dauer [s]');
+title('Pause');
+grid on
+
+nexttile
+boxchart(ZyklusJeBlock(:),'BoxFaceColor',[0.65 0.40 0.75]);
+yline(60,'r--','Soll 60 s');
+ylabel('Dauer [s]');
+title('Zyklus');
+grid on
+
+title(layout4,sprintf('Gesamtergebnis aller %d Messungen',nGueltig));
+
+%% 10. SPEICHERN
+ausgabe = fullfile(ordner,'Fourier_Mehrere_Aufnahmen');
+if ~exist(ausgabe,'dir')
+    mkdir(ausgabe);
+end
+
+exportgraphics(fig1,fullfile(ausgabe,...
+    'Abb1_FFT_Impulsspektrum.png'),'Resolution',300);
+exportgraphics(fig2,fullfile(ausgabe,...
+    'Abb2_Zeitfehler.png'),'Resolution',300);
+exportgraphics(fig3,fullfile(ausgabe,...
+    'Abb3_Einfluss_Impulszahl.png'),'Resolution',300);
+exportgraphics(fig4,fullfile(ausgabe,...
+    'Abb4_Gesamtergebnis.png'),'Resolution',300);
+writetable(ProAufnahme,...
+    fullfile(ausgabe,'FFT_Pro_Aufnahme.csv'));
+writetable(Gesamt,...
+    fullfile(ausgabe,'FFT_Gesamtergebnis.csv'));
+save(fullfile(ausgabe,'FFT_Arbeitsbereich.mat'));
+
+fprintf('\nFERTIG. Ergebnisse gespeichert in:\n%s\n',ausgabe);
+
+
