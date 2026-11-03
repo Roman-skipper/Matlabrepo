@@ -16,7 +16,8 @@ minPulsabstand_s = 0.10;
 blockTrennung_s = 2;
 minPulseJeBlock = 100;
 
-FsFFT = 4;             % 4 Werte/s wie in der Paper-Auswertung
+FsFFT = 4;             % Fuer langsamen 60-s-Blockrhythmus
+FsPulse = 50;          % Fuer schnellen Impulsrhythmus um 4,6-4,7 Hz
 zyklusSoll_s = 60;
 stimSoll_s = 30;
 anzahlBloecke = 9;
@@ -80,8 +81,13 @@ tFFT = (0:1/FsFFT:gesamtzeit_s-1/FsFFT)';
 N = numel(tFFT);
 f = FsFFT*(0:floor(N/2))/N;
 
+tPulse = (0:1/FsPulse:gesamtzeit_s-1/FsPulse)';
+NPulse = numel(tPulse);
+fPulse = FsPulse*(0:floor(NPulse/2))/NPulse;
+
 Signale = NaN(N,nDateien);
 Spektren = NaN(numel(f),nDateien);
+PulsSpektren = NaN(numel(fPulse),nDateien);
 
 BloeckeGefunden = zeros(nDateien,1);
 FrequenzImpulse_Hz = NaN(nDateien,1);
@@ -228,6 +234,26 @@ for m = 1:nDateien
 
     Signale(:,m) = signal;
 
+    %% Impulszug fuer das schnelle Spektrum um 4,6-4,7 Hz
+    % Die Pulse werden als kurze Ereignisse dargestellt. Fuer die
+    % Wiederholungsfrequenz ist ihre genaue Pulsbreite nicht erforderlich.
+    pulsRelativ = pulszeit-blockStart(1);
+    pulsRelativ = pulsRelativ(pulsRelativ>=0 & ...
+        pulsRelativ<gesamtzeit_s);
+
+    pulsSignal = zeros(NPulse,1);
+    pulsPosition = round(pulsRelativ*FsPulse)+1;
+    pulsPosition = pulsPosition(pulsPosition>=1 & ...
+        pulsPosition<=NPulse);
+    pulsSignal(unique(pulsPosition)) = 1;
+
+    xPuls = pulsSignal-mean(pulsSignal);
+    YPuls = fft(xPuls);
+    APuls = abs(YPuls/NPulse);
+    APuls = APuls(1:floor(NPulse/2)+1);
+    APuls(2:end-1) = 2*APuls(2:end-1);
+    PulsSpektren(:,m) = APuls;
+
     %% FFT der einzelnen Aufnahme
     x = signal-mean(signal);
     Y = fft(x);
@@ -274,6 +300,7 @@ Datei = string(dateien(:));
 Datei = Datei(Gueltig);
 Signale = Signale(:,Gueltig);
 Spektren = Spektren(:,Gueltig);
+PulsSpektren = PulsSpektren(:,Gueltig);
 BloeckeGefunden = BloeckeGefunden(Gueltig);
 FrequenzImpulse_Hz = FrequenzImpulse_Hz(Gueltig);
 ZyklusMittel_s = ZyklusMittel_s(Gueltig);
@@ -287,6 +314,7 @@ nGueltig = sum(Gueltig);
 mittelSignal = mean(Signale,2);
 mittelSpektrum = mean(Spektren,2);
 sdSpektrum = std(Spektren,0,2);
+mittelPulsSpektrum = mean(PulsSpektren,2);
 
 %% 7. GEMITTELTEN HAUPTPEAK BESTIMMEN
 suchbereich = f>=0.010 & f<=0.025;
@@ -297,6 +325,13 @@ idxMittelPeak = idxBereich(lokal);
 mittelPeak_Hz = f(idxMittelPeak);
 mittelZyklusFFT_s = 1/mittelPeak_Hz;
 
+% Stimulationsfrequenz im erwarteten Bereich suchen
+suchPuls = fPulse>=4.0 & fPulse<=5.2;
+idxPulsBereich = find(suchPuls);
+[~,lokalPuls] = max(mittelPulsSpektrum(suchPuls));
+idxPulsPeak = idxPulsBereich(lokalPuls);
+pulsPeak_Hz = fPulse(idxPulsPeak);
+
 fprintf('\n========================================\n');
 fprintf('GESAMTERGEBNIS AUS %d AUFNAHMEN\n',nGueltig);
 fprintf('========================================\n');
@@ -304,6 +339,8 @@ fprintf('Soll-Blockfrequenz: %.6f Hz\n',fSoll_Hz);
 fprintf('Gemittelter FFT-Peak: %.6f Hz\n',mittelPeak_Hz);
 fprintf('Zyklus aus gemittelter FFT: %.3f s\n',...
     mittelZyklusFFT_s);
+fprintf('FFT-Peak der Stimulationsimpulse: %.4f Hz\n',...
+    pulsPeak_Hz);
 fprintf('Mittlere direkte Zyklusdauer: %.3f s\n',...
     mean(ZyklusMittel_s));
 fprintf('Mittlere Impulsfrequenz: %.4f Hz\n',...
@@ -317,11 +354,12 @@ ProAufnahme = table(Datei,BloeckeGefunden,FrequenzImpulse_Hz,...
     Phase_Grad,Zeitverschiebung_s);
 
 Gesamt = table(nGueltig,fSoll_Hz,mittelPeak_Hz,...
-    mittelZyklusFFT_s,mean(ZyklusMittel_s),...
+    mittelZyklusFFT_s,pulsPeak_Hz,mean(ZyklusMittel_s),...
     std(ZyklusMittel_s),mean(FrequenzImpulse_Hz),...
     mean(Zeitverschiebung_s),std(Zeitverschiebung_s),...
     'VariableNames',{'N_Aufnahmen','Soll_Blockfrequenz_Hz',...
     'FFT_Peak_gemittelt_Hz','Zyklus_aus_FFT_s',...
+    'FFT_Impulspeak_Hz',...
     'Zyklus_direkt_Mittel_s','Zyklus_direkt_SD_s',...
     'Impulsfrequenz_Mittel_Hz',...
     'Zeitverschiebung_Mittel_s','Zeitverschiebung_SD_s'});
@@ -332,8 +370,8 @@ disp('=== GEMITTELTES ERGEBNIS ===');
 disp(Gesamt);
 
 %% 9. PAPER-GRAFIK
-fig = figure('Color','w','Position',[100 80 1150 900]);
-layout = tiledlayout(3,1,...
+fig = figure('Color','w','Position',[100 60 1200 900]);
+layout = tiledlayout(2,2,...
     'TileSpacing','compact','Padding','compact');
 
 % A: Zeitbereich
@@ -351,18 +389,11 @@ legend('Ideal','Mittelwert der Aufnahmen',...
     'Location','southoutside','Orientation','horizontal');
 grid on
 
-% B: FFT mit Standardabweichungsbereich
+% B: Langsame Fourier-Analyse des 60-s-Rhythmus
 nexttile
-untergrenze = max(0,mittelSpektrum-sdSpektrum);
-obergrenze = mittelSpektrum+sdSpektrum;
-
-fill([f fliplr(f)],...
-    [untergrenze' fliplr(obergrenze')],...
-    [0.75 0.86 0.95],...
-    'EdgeColor','none','FaceAlpha',0.6);
-hold on
 plot(f,mittelSpektrum,'Color',[0 0.35 0.70],...
     'LineWidth',2);
+hold on
 plot(f,AIdeal,'k--','LineWidth',1.3);
 xline(fSoll_Hz,'r--','Soll: 1/60 Hz',...
     'LineWidth',1.3,...
@@ -374,12 +405,30 @@ xlabel('Frequenz [Hz]');
 ylabel('Amplitude');
 title(sprintf(['B: Gemitteltes FFT-Spektrum - Peak %.5f Hz '...
     '(%.2f s)'],mittelPeak_Hz,mittelZyklusFFT_s));
-legend('Mittelwert +/- SD','Gemessen','Ideal',...
+legend('Gemessen','Ideal',...
     'Sollfrequenz','Gemessener Peak',...
     'Location','northeast');
 grid on
 
-% C: Zeitverschiebung jeder Aufnahme
+% C: Schnelle Fourier-Analyse der einzelnen Stimulationsimpulse
+nexttile
+plot(fPulse,mittelPulsSpektrum,...
+    'Color',[0.55 0.15 0.65],'LineWidth',2);
+hold on
+xline(4.7,'r--','Soll: 4,7 Hz','LineWidth',1.3,...
+    'LabelVerticalAlignment','bottom');
+plot(pulsPeak_Hz,mittelPulsSpektrum(idxPulsPeak),...
+    'ro','MarkerFaceColor','r');
+xlim([4.0 5.2]);
+xlabel('Frequenz [Hz]');
+ylabel('Amplitude');
+title(sprintf('C: Impulsspektrum - Hauptpeak %.4f Hz',...
+    pulsPeak_Hz));
+legend('Gemessen','Sollfrequenz','Gemessener Peak',...
+    'Location','northeast');
+grid on
+
+% D: Zeitverschiebung jeder Aufnahme
 nexttile
 bar(1:nGueltig,Zeitverschiebung_s,...
     'FaceColor',[0.20 0.60 0.45]);
@@ -388,7 +437,7 @@ yline(mean(Zeitverschiebung_s),'r-',...
     sprintf('Mittelwert %.3f s',mean(Zeitverschiebung_s)));
 xlabel('Aufnahme');
 ylabel('Zeitverschiebung [s]');
-title('C: Phasenbedingte Zeitverschiebung bei 1/60 Hz');
+title('D: Phasenbedingte Zeitverschiebung bei 1/60 Hz');
 xticks(1:nGueltig);
 xticklabels(Datei);
 xtickangle(25);
