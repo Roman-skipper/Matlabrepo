@@ -570,4 +570,3 @@ if ~isempty(skriptPfad) && isfile([skriptPfad '.m'])
 end
 disp(ProAufnahme); disp(Statistik);
 fprintf('\nFERTIG. Bilder und Tabellen unter:\n%s\n',ziel);
-
