@@ -397,29 +397,88 @@ phaseMinAufnahmen = max(1,ceil(nG/2));
 PhaseAnzeige = PhaseN>=phaseMinAufnahmen & PhaseR>=phaseMinR;
 PhaseMittel_deg(~PhaseAnzeige) = NaN;
 
-fig5 = figure('Color','w','Position',[100 100 1100 530]);
-axPhase = axes(fig5); hold(axPhase,'on');
-set(axPhase,'XScale','log');
+% Detailansicht: oben Leistung als Orientierung, darunter die Phase.
+% Linearer Frequenzmassstab in zwei getrennten Zoomfenstern.
+% Keine Glaettung; Luecken und Spruenge bei +/-180 Grad bleiben sichtbar.
+fig5 = figure('Color','w','Position',[70 70 1200 790]);
+phaseLayout = tiledlayout(fig5,3,2,'TileSpacing','compact','Padding','compact');
+phaseFenster = [0.010 0.024; fGemeinsam(iStim)-0.035 fGemeinsam(iStim)+0.035];
+phasePeaks = [iBlock iStim];
+phaseTitel = {'Blockrhythmus','Stimulationsrhythmus'};
+phaseFarben = lines(nG);
+phaseLegende = gobjects(nG+1,1);
+phaseNamen = strings(nG+1,1);
 for j = 1:nG
-    plot(fGemeinsam,PhaseEinzel_deg(:,j),'.','Color',hell, ...
-        'MarkerSize',4,'HandleVisibility','off');
+    phaseNamen(j) = Datei(j);
 end
-% Punkte statt Linien verhindern falsche Verbindungen ueber Phasenspruenge
-% oder ausgeblendete Frequenzbereiche.
-hPhase = plot(fGemeinsam,PhaseMittel_deg,'.','Color',blau,'MarkerSize',7);
-xline(1/zyklusSoll,':','Color',grau,'HandleVisibility','off');
-xline(fSoll,':','Color',grau,'HandleVisibility','off');
-yline(0,':','Color',grau,'HandleVisibility','off');
-xlim([0.008 6]); ylim([-190 190]); yticks(-180:90:180);
-xticks([0.01 1/60 0.05 0.1 0.5 1 4.7]);
-xticklabels({'0,01','0,0167','0,05','0,1','0,5','1','4,7'});
-xlabel('Frequenz [Hz] - logarithmische Achse'); ylabel('Phase [Grad]');
-title('Phasenspektrum der erkannten Impulsanfaenge');
-subtitle(sprintf(['Bezug: erster Blockbeginn | helle Punkte: Einzelaufnahmen\n' ...
-    'Leistung >= %.1f %% | Mittel aus mindestens %d Aufnahmen, R >= %.2f'], ...
+phaseNamen(end) = "Kreisfoermiger Mittelwert";
+for bereich = 1:2
+    fenster = fGemeinsam>=phaseFenster(bereich,1) & ...
+              fGemeinsam<=phaseFenster(bereich,2);
+    fx = fGemeinsam(fenster);
+    ip = phasePeaks(bereich);
+
+    % Leistung hilft zu erkennen, wo die Phase interpretierbar ist.
+    axPower = nexttile(phaseLayout,bereich);
+    area(axPower,fx,mittelP(fenster),'FaceColor',blau, ...
+        'FaceAlpha',0.10,'EdgeColor',blau,'LineWidth',1.5);
+    hold(axPower,'on');
+    xline(axPower,fGemeinsam(ip),':','Color',grau,'LineWidth',1);
+    xlim(axPower,phaseFenster(bereich,:));
+    ylim(axPower,[0 max(mittelP(fenster))*1.18]);
+    ylabel(axPower,'Relative Leistung');
+    title(axPower,phaseTitel{bereich},'FontSize',14,'FontWeight','bold');
+    subtitle(axPower,sprintf('FFT-Peak bei %.5f Hz',fGemeinsam(ip)));
+    set(axPower,'XTickLabel',[],'Box','off','Color',[0.985 0.989 0.994]);
+    grid(axPower,'on');
+
+    axP = nexttile(phaseLayout,bereich+2,[2 1]); hold(axP,'on');
+    for j = 1:nG+1
+        if j<=nG
+            v = PhaseEinzel_deg(fenster,j);
+            farbe = 0.30+0.70*phaseFarben(j,:);
+            breite = 1.1; stil = '-';
+        else
+            v = PhaseMittel_deg(fenster);
+            farbe = [0.10 0.18 0.27]; breite = 2.5; stil = '-';
+        end
+        % Jeden Punkt erhalten, aber Verbindung ueber Winkelspruenge trennen.
+        sprung = find(abs(diff(v))>180);
+        xd = repelem(fx,2); yd = repelem(v,2);
+        xd(2*sprung) = NaN;
+        h = plot(axP,xd,yd,stil,'Color',farbe,'LineWidth',breite);
+        % Isolierte gueltige Werte sind auch ohne Liniensegment sichtbar.
+        isoliert = isfinite(v) & [true;~isfinite(v(1:end-1))] & ...
+                    [~isfinite(v(2:end));true];
+        plot(axP,fx(isoliert),v(isoliert),'.','Color',farbe, ...
+             'MarkerSize',8,'HandleVisibility','off');
+        if bereich==1, phaseLegende(j)=h; end
+    end
+    xline(axP,fGemeinsam(ip),':','Color',grau,'HandleVisibility','off');
+    yline(axP,0,':','Color',[0.65 0.69 0.73],'HandleVisibility','off');
+    xlim(axP,phaseFenster(bereich,:)); ylim(axP,[-195 195]);
+    yticks(axP,-180:90:180);
+    yticklabels(axP,{'-180','-90','0','90','180'});
+    ylabel(axP,'Phase [Grad]'); xlabel(axP,'Frequenz [Hz]');
+    if bereich==1, xtickformat(axP,'%.3f'); else, xtickformat(axP,'%.2f'); end
+    set(axP,'Box','off','Color',[0.985 0.989 0.994]); grid(axP,'on');
+    if PhaseAnzeige(ip)
+        info = sprintf('Am FFT-Peak: %.1f Grad | n = %d | R = %.2f', ...
+            PhaseMittel_deg(ip),PhaseN(ip),PhaseR(ip));
+    else
+        info = sprintf('Am FFT-Peak: kein angezeigter Mittelwert | n = %d',PhaseN(ip));
+    end
+    title(axP,info,'FontWeight','normal','FontSize',10);
+end
+lgPhase = legend(ancestor(phaseLegende(1),'axes'),phaseLegende, ...
+    cellstr(phaseNamen),'Orientation','horizontal', ...
+    'NumColumns',min(nG+1,5),'Box','off','Interpreter','none');
+lgPhase.Layout.Tile = 'south';
+title(phaseLayout,'Phase im Detail','FontSize',19,'FontWeight','bold');
+subtitle(phaseLayout,sprintf([ ...
+    'Zeitnull: erster Blockbeginn jeder Aufnahme | Phase ohne Glaettung\n' ...
+    'Anzeige ab %.1f %% Leistung; Mittelwert ab n = %d und R = %.2f'], ...
     100*phaseMinLeistung,phaseMinAufnahmen,phaseMinR));
-legend(hPhase,{'Kreisfoermiger Phasenmittelwert'},'Location','best','Box','off');
-grid on; box off
 
 PhaseTabelle = table(fGemeinsam,PhaseMittel_deg,PhaseR,PhaseN,PhaseAnzeige, ...
     'VariableNames',{'Frequenz_Hz','Zirkulaerer_Mittelwert_Grad', ...
@@ -487,7 +546,10 @@ if fid>=0
         'Grafik 4: Mittel/Median/SD der Aufnahmemittelwerte, nicht aller Einzelimpulse.\n' ...
         'Bei n=1 ist keine Streuung zwischen Aufnahmen bestimmbar.\n' ...
         'Statistik-CSV trennt gepoolte Bloecke und Aufnahmemittelwerte.\n' ...
-        'Grafik 5: Phase der Hann-gefensterten Ereignisfolge in Grad (-180 bis +180).\n' ...
+        'Grafik 5: zwei Detailfenster fuer Block- und Impulsrhythmus; oben Leistung, unten Phase.\n' ...
+        'Phase der Hann-gefensterten Ereignisfolge in Grad (-180 bis +180), ohne Glaettung.\n' ...
+        'Linien werden bei Datenluecken und Winkelspruengen getrennt. Farben bezeichnen Aufnahmen.\n' ...
+        'Die CSV enthaelt weiterhin den gesamten ausgewerteten Frequenzbereich.\n' ...
         'Zeitnull ist der erste erkannte Blockbeginn, separat pro Aufnahme.\n' ...
         'KEINE Phase gegen ein ideales Signal, keine absolute Startlatenz.\n' ...
         'Komplexe FFT-Koeffizienten werden auf das gemeinsame Frequenzraster interpoliert.\n' ...
