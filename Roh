@@ -1,26 +1,570 @@
-dateien = {'auf1.csv','auf2.csv','auf3.csv','auf4.csv'};
-tInc = 1e-5;
+%% SEP: Rohdaten-FFT und uebersichtliche Statistikgrafiken
+% MATLAB R2024a. Nur Referenz-Rohdateien mit gleichen Sollwerten waehlen.
+% Alle Abschnitte gemeinsam mit Run ausfuehren.
+% Erwartetes Format: CH1(V),t0 = ...s, tInc = ...s,
+% danach Spannung,leere Spalte,leere Spalte.
+% FFT und Phase werden DIREKT aus den Rohspannungswerten berechnet.
+% Keine Filterung, kein Hann-Fenster, kein Ereignisraster, kein Zero-Padding.
+% Stimulation hier = erster bis letzter Impulsanfang + mediane Periode.
+% Pause hier = Zyklus - diese periodenbasierte Stimulation.
+% Diese beiden Groessen sind abgeleitet, keine gemessenen Programmendmarker.
 
-f = (0:0.001:6)';
-A = nan(length(f),length(dateien));
+clear; clc; close all;
 
-for k = 1:length(dateien)
+%% 1. Einstellungen
+schwelle = 5;
+polaritaet = 1;           % +1 positive, -1 negative Impulse
+minAbstand = 0.10;       % Sekunden; gegen letzten akzeptierten Beginn
+blockLuecke = 2;
+minImpulse = 100;        % Auswahlregel, kein Beweis fuer Vollstaendigkeit
+nBloecke = 9;
+fSoll = 4.7;
+zyklusSoll = 60;
+fGemeinsam = (0.001:0.0001:6)'; % gemeinsame Achse fuer Mittelwert/Median
+phaseMinLeistung = 0.01; % Darstellungsgrenze: 1 % des jeweiligen Leistungsmaximums
+phaseMinR = 0.20;        % Unterhalb: mittlere Phasenrichtung nicht anzeigen
 
-    M = readmatrix(dateien{k},'NumHeaderLines',1);
-    u = M(:,1); u = u(isfinite(u));
+blau = [0.10 0.36 0.63];
+orange = [0.86 0.40 0.15];
+gruen = [0.16 0.55 0.44];
+grau = [0.55 0.58 0.62];
+hell = [0.79 0.84 0.89];
 
-    N = length(u); Y = fft(u-mean(u));
-    fEinzeln = (0:floor(N/2)-1)'/(N*tInc);
-    YEinzeln = abs(Y(1:floor(N/2)))/N;
-
-    A(:,k) = interp1(fEinzeln,YEinzeln,f);
-
+%% 2. Eine bis vier normale Aufnahmen auswaehlen
+[dateien,ordner] = uigetfile('*.csv', ...
+    'Normale Rigol-Rohaufnahmen markieren (Strg/Cmd)', 'MultiSelect','on');
+if isequal(dateien,0), return; end
+if ischar(dateien), dateien = {dateien}; end
+dateien = dateien(:);
+nM = numel(dateien);
+if nM ~= 4
+    warning('%d statt vier Aufnahmen ausgewaehlt. Anzahl wird korrekt ausgewiesen.',nM);
+end
+if any(contains(lower(string(dateien)),["frequenz","mittlung","pause","sweep"]))
+    error('Bitte nur die normalen Referenzaufnahmen auswaehlen, keine Parametervarianten.');
 end
 
-plot(f,A,'Color',[0.8 0.8 0.8]); hold on
-h1 = plot(f,mean(A,2,'omitnan'),'b','LineWidth',2);
-h2 = plot(f,median(A,2,'omitnan'),'r','LineWidth',2);
+Impulse = nan(nM,nBloecke);
+Frequenz = nan(nM,nBloecke);
+Stim = nan(nM,nBloecke);
+Pause = nan(nM,nBloecke-1);
+Zyklus = nan(nM,nBloecke-1);
+Startfehler = nan(nM,nBloecke);
+Spektren = nan(numel(fGemeinsam),nM);
+KomplexSpektren = complex(nan(numel(fGemeinsam),nM));
+Gueltig = false(nM,1);
+Status = repmat("Nicht ausgewertet",nM,1);
+BloeckeGefunden = zeros(nM,1);
+Samples = nan(nM,1);
+tInc = nan(nM,1);
+VerworfeneFlanken = nan(nM,1);
+RandHoch = false(nM,1);
+KleineGruppen = zeros(nM,1);
 
-xlim([0 6]); grid on
-xlabel('Frequenz [Hz]'); ylabel('FFT-Betrag');
-legend([h1 h2],{'Mittelwert','Median'});
+%% 3. Rohdateien portionsweise lesen und Impulse erkennen
+for m = 1:nM
+    fprintf('\n=== %s (%d/%d) ===\n',dateien{m},m,nM);
+    fid = -1;
+    try
+        fid = fopen(fullfile(ordner,dateien{m}),'r');
+        if fid < 0, error('Datei konnte nicht geoeffnet werden.'); end
+        kopf = fgetl(fid);
+        if ~ischar(kopf), error('Datei ist leer.'); end
+        treffer = regexpi(kopf,'t\s*inc\s*=\s*([-+0-9.eE]+)\s*s', ...
+            'tokens','once');
+        if isempty(treffer), error('Rigol-Kopfzeile mit tInc fehlt.'); end
+        dt = str2double(treffer{1});
+        if ~isfinite(dt) || dt <= 0, error('Ungueltiges tInc.'); end
+        tInc(m) = dt;
+        if ~ismember(polaritaet,[-1 1]), error('Polaritaet muss +1 oder -1 sein.'); end
+
+        offset = 0; vorherHoch = false; erstesStueck = true;
+        startHoch = false; idx = zeros(0,1);
+        rawTeile = cell(0,1);
+        while ~feof(fid)
+            C = textscan(fid,'%f%f%f',1000000,'Delimiter',',', ...
+                'EndOfLine','\n','EmptyValue',NaN,'ReturnOnError',false);
+            u = C{1}; clear C
+            if isempty(u)
+                if ~feof(fid), error('CSV-Import vorzeitig unterbrochen.'); end
+                break
+            end
+            if any(~isfinite(u))
+                error('Ungueltige Samples: Datenluecken zuerst pruefen.');
+            end
+            rawTeile{end+1,1} = u; %#ok<AGROW>
+            high = polaritaet*u > schwelle;
+            if erstesStueck
+                startHoch = high(1);
+                vorherHoch = high(1); % angeschnittenen Beginn nicht erfinden
+                erstesStueck = false;
+            end
+            lokal = find(high & ~[vorherHoch; high(1:end-1)]);
+            idx = [idx; offset+lokal]; %#ok<AGROW>
+            vorherHoch = high(end);
+            offset = offset+numel(u);
+            clear u high lokal
+        end
+        fclose(fid); fid = -1;
+        Samples(m) = offset;
+        raw = vertcat(rawTeile{:}); clear rawTeile
+        RandHoch(m) = startHoch || vorherHoch;
+        if RandHoch(m)
+            warning('%s: Moeglicherweise angeschnittener Randimpuls.',dateien{m});
+        end
+        if isempty(idx), error('Keine Impulse. Schwelle/Polaritaet pruefen.'); end
+
+        keep = false(size(idx)); keep(1) = true; letzter = idx(1);
+        for k = 2:numel(idx)
+            if (idx(k)-letzter)*dt >= minAbstand
+                keep(k) = true; letzter = idx(k);
+            end
+        end
+        VerworfeneFlanken(m) = sum(~keep);
+        p = (idx(keep)-1)*dt; % t0 entfaellt bei allen Zeitdifferenzen
+        clear idx keep
+
+        bs = [1;find(diff(p)>blockLuecke)+1];
+        be = [bs(2:end)-1;numel(p)];
+        groesse = be-bs+1;
+        fprintf('Impulse aller Blockkandidaten: '); fprintf('%d ',groesse); fprintf('\n');
+        ids = find(groesse>=minImpulse);
+        BloeckeGefunden(m) = numel(ids);
+        KleineGruppen(m) = sum(groesse<minImpulse);
+        if KleineGruppen(m)>0
+            warning('Kleine Gruppen nicht verwendet: auf Stoerungen/Teilbloecke pruefen.');
+        end
+        if numel(ids)<nBloecke, error('Nur %d geeignete Bloecke.',numel(ids)); end
+        if numel(ids)>nBloecke
+            warning('Mehr als neun Kandidaten: Auswahl der ersten neun pruefen.');
+        end
+        ids = ids(1:nBloecke);
+        starts = zeros(1,nBloecke); allePulse = zeros(0,1);
+        for b = 1:nBloecke
+            q = p(bs(ids(b)):be(ids(b)));
+            periode = median(diff(q));
+            starts(b) = q(1);
+            Impulse(m,b) = numel(q);
+            Frequenz(m,b) = 1/periode;
+            Stim(m,b) = q(end)-q(1)+periode;
+            allePulse = [allePulse;q]; %#ok<AGROW>
+        end
+        Zyklus(m,:) = diff(starts);
+        Pause(m,:) = Zyklus(m,:)-Stim(m,1:end-1);
+        Startfehler(m,:) = starts-starts(1)-(0:nBloecke-1)*zyklusSoll;
+
+        %% Direkte FFT der Rohspannungswerte
+        raw = raw-mean(raw); % nur Gleichanteil entfernen, keine Filterung
+        Nraw = numel(raw);
+        Y = fft(raw);
+        nPos = floor(Nraw/2);
+        f = (0:nPos-1)'/(Nraw*dt);
+        leistung = abs(Y(1:nPos)).^2;
+        P = interp1(f,leistung,fGemeinsam,'linear',0);
+        if any(~isfinite(P)) || max(P)<=0, error('Ungueltiges Spektrum.'); end
+        Spektren(:,m) = P/max(P); % eine Normierung ueber beide Frequenzbereiche
+        % Winkel NICHT direkt interpolieren (Sprung bei +/-180 Grad).
+        % Stattdessen komplexe Fourierkoeffizienten interpolieren.
+        KomplexSpektren(:,m) = interp1(f,Y(1:nPos), ...
+            fGemeinsam,'linear',NaN);
+        Gueltig(m) = true; Status(m) = "OK";
+        fprintf('Frequenz %.6f Hz | Zyklus %.6f s\n', ...
+            mean(Frequenz(m,:)),mean(Zyklus(m,:)));
+        clear p allePulse raw Y leistung P
+    catch ME
+        if fid>=0, fclose(fid); end
+        Status(m) = string(ME.message);
+        warning('%s: %s',dateien{m},ME.message);
+    end
+end
+
+Qualitaet = table(string(dateien),Gueltig,Status,Samples,tInc, ...
+    BloeckeGefunden,KleineGruppen,VerworfeneFlanken,RandHoch, ...
+    'VariableNames',{'Datei','Gueltig','Status','Samples','tInc_s', ...
+    'GeeigneteBlockkandidaten','KleineGruppen','VerworfeneFlanken','RandHoch'});
+disp(Qualitaet);
+if ~any(Gueltig), error('Keine gueltige Aufnahme. Siehe Meldungen.'); end
+
+% Ausschliesslich vollstaendig erfolgreich ausgewertete Aufnahmen verwenden.
+Datei = string(dateien(Gueltig));
+Impulse = Impulse(Gueltig,:); Frequenz = Frequenz(Gueltig,:);
+Stim = Stim(Gueltig,:); Pause = Pause(Gueltig,:);
+Zyklus = Zyklus(Gueltig,:); Startfehler = Startfehler(Gueltig,:);
+Spektren = Spektren(:,Gueltig); nG = sum(Gueltig);
+KomplexSpektren = KomplexSpektren(:,Gueltig);
+
+%% 4. Tabellen und numerische Konsistenz
+residuum = abs(Stim(:,1:end-1)+Pause-Zyklus);
+assert(all(residuum(:)<1e-8),'Dauersumme inkonsistent.');
+assert(all(abs(sum(Zyklus-zyklusSoll,2)-Startfehler(:,end))<1e-8), ...
+    'Startfehler inkonsistent.');
+
+ProAufnahme = table(Datei,mean(Frequenz,2),mean(Impulse,2), ...
+    mean(Stim,2),median(Stim,2),mean(Pause,2),median(Pause,2), ...
+    mean(Zyklus,2),median(Zyklus,2),Startfehler(:,end), ...
+    nBloecke*median(Zyklus,2), ...
+    'VariableNames',{'Datei','Frequenz_Mittel_Hz','Impulse_Mittel', ...
+    'Stim_Mittel_s','Stim_Median_s','Pause_Mittel_s','Pause_Median_s', ...
+    'Zyklus_Mittel_s','Zyklus_Median_s','Startfehler_Block9_s', ...
+    'Gesamtdauer_HOCHGERECHNET_s'});
+
+dateiSpalte = repelem(Datei,nBloecke);
+blockSpalte = repmat((1:nBloecke)',nG,1);
+pa = [Pause,nan(nG,1)]; zy = [Zyklus,nan(nG,1)];
+Blockdaten = table(dateiSpalte,blockSpalte,reshape(Impulse',[],1), ...
+    reshape(Frequenz',[],1),reshape(Stim',[],1),reshape(pa',[],1), ...
+    reshape(zy',[],1),reshape(Startfehler',[],1), ...
+    'VariableNames',{'Datei','Block','Impulse','Frequenz_Hz', ...
+    'Stim_periodenbasiert_s','Pause_rechnerisch_s','Zyklus_s','Startfehler_s'});
+
+parameter = ["Frequenz";"Stimulation_periodenbasiert";"Pause_rechnerisch";"Zyklus"];
+einheit = ["Hz";"s";"s";"s"];
+werte = {Frequenz,Stim,Pause,Zyklus};
+Statistik = table;
+for k = 1:4
+    W = werte{k}; x = W(:);
+    for ebene = 1:2
+        if ebene==1
+            v = x; art = "Bloecke_gepoolt";
+        else
+            v = mean(W,2); art = "Aufnahmemittelwerte";
+        end
+        sd = NaN; if numel(v)>1, sd=std(v); end
+        zeile = table(parameter(k),einheit(k),art,numel(v),mean(v), ...
+            median(v),sd,min(v),max(v),'VariableNames', ...
+            {'Parameter','Einheit','Ebene','N','Mittelwert','Median','SD','Minimum','Maximum'});
+        Statistik = [Statistik;zeile]; %#ok<AGROW>
+    end
+end
+
+%% 5. Grafik 1: EINE FFT mit beiden Rhythmen
+mittelP = mean(Spektren,2); medianP = median(Spektren,2);
+skalierung = max(mittelP);
+mittelP = mittelP/skalierung; medianP = medianP/skalierung;
+bereichBlock = find(fGemeinsam>=0.010 & fGemeinsam<=0.025);
+bereichStim = find(fGemeinsam>=4.0 & fGemeinsam<=5.2);
+[~,k] = max(mittelP(bereichBlock)); iBlock = bereichBlock(k);
+[~,k] = max(mittelP(bereichStim)); iStim = bereichStim(k);
+
+fig1 = figure('Color','w','Position',[80 100 1100 510]);
+h1 = semilogx(fGemeinsam,mittelP,'Color',blau,'LineWidth',1.7); hold on
+h2 = semilogx(fGemeinsam,medianP,'--','Color',orange,'LineWidth',1.2);
+xline(1/zyklusSoll,':','Color',grau,'HandleVisibility','off');
+xline(fSoll,':','Color',grau,'HandleVisibility','off');
+plot(fGemeinsam([iBlock iStim]),mittelP([iBlock iStim]),'o', ...
+    'Color',blau,'MarkerFaceColor',blau,'HandleVisibility','off');
+text(fGemeinsam(iBlock)*1.12,mittelP(iBlock)+0.07, ...
+    sprintf('Blockrhythmus\n%.5f Hz',fGemeinsam(iBlock)), ...
+    'Color',blau,'FontSize',11,'VerticalAlignment','bottom');
+text(fGemeinsam(iStim)/1.12,mittelP(iStim)+0.06, ...
+    sprintf('Peak im Impulsbereich\n%.4f Hz',fGemeinsam(iStim)), ...
+    'Color',blau,'FontSize',11,'HorizontalAlignment','right','VerticalAlignment','bottom');
+xlim([0.008 6]); ylim([0 max([mittelP;medianP])*1.30]);
+xticks([0.01 1/60 0.05 0.1 0.5 1 4.7]);
+xticklabels({'0,01','0,0167','0,05','0,1','0,5','1','4,7'});
+xlabel('Frequenz [Hz] - logarithmische Achse');
+ylabel('Relative spektrale Leistung');
+title('Direkte Rohspannungs-FFT: Block- und Stimulationsrhythmus');
+subtitle(sprintf('%d Aufnahmen | ungefilterte Rohspannung | normierte Leistung | Sollwerte punktiert',nG));
+legend([h1 h2],{'Mittelwert','Median'},'Location','northwest','Box','off');
+grid on; box off
+
+%% 6. Grafik 2: Startfehler, einzelne Aufnahmen + Mittel + Median
+fig2 = figure('Color','w','Position',[100 100 1000 530]); hold on
+b = 1:nBloecke;
+M = mean(Startfehler,1)*1000;
+MD = median(Startfehler,1)*1000;
+for j = 1:nG
+    plot(b,Startfehler(j,:)*1000,'-','Color',hell, ...
+        'LineWidth',1,'HandleVisibility','off');
+end
+if nG>1
+    S = std(Startfehler,0,1)*1000;
+    hBand = fill([b fliplr(b)],[M-S fliplr(M+S)],blau, ...
+        'FaceAlpha',0.10,'EdgeColor','none');
+end
+hM = plot(b,M,'o-','Color',blau,'MarkerFaceColor',blau,'LineWidth',1.8);
+hD = plot(b,MD,'s--','Color',orange,'MarkerFaceColor','w','LineWidth',1.5);
+yline(0,':','Color',grau,'HandleVisibility','off');
+if nG>1
+    legend([hM hD hBand],{'Mittelwert','Median','Mittelwert +/- 1 SD'}, ...
+        'Location','best','Box','off');
+else
+    legend([hM hD],{'Mittelwert','Median'},'Location','best','Box','off');
+end
+xlabel('Stimulationsblock'); ylabel('Startfehler gegen 60-s-Raster [ms]');
+title('Wie veraendert sich der Zeitfehler?');
+subtitle(sprintf('%d Aufnahmen | helle Linien: einzelne Aufnahmen | erster Block auf null gesetzt',nG));
+xticks(b); xlim([1 nBloecke]); grid on; box off
+
+%% 7. Grafik 3: Erkannte Impulszahlen, Einzelwerte + Box + Mittelwert
+fig3 = figure('Color','w','Position',[80 100 1180 480]);
+tl = tiledlayout(1,3,'TileSpacing','compact','Padding','compact');
+gruppen = unique(Impulse(:));
+u = Impulse(:,1:end-1);
+gruppenDaten = {Impulse(:),u(:),u(:)};
+yDaten = {Stim(:),Pause(:),Zyklus(:)};
+namen = {'Stimulation (periodenbasiert)','Pause (rechnerisch)','Zyklus (Start zu Start)'};
+farben = {blau,gruen,[0.49 0.38 0.65]};
+soll = [30 30 60];
+Impulsvergleich = table;
+for k = 1:3
+    nexttile; hold on
+    g = gruppenDaten{k}; y = yDaten{k};
+    [~,gx] = ismember(g,gruppen);
+    boxchart(gx,y,'BoxFaceColor',farben{k},'BoxFaceAlpha',0.16, ...
+        'MarkerStyle','none','HandleVisibility','off');
+    labels = cell(numel(gruppen),1);
+    for j = 1:numel(gruppen)
+        v = y(g==gruppen(j));
+        labels{j} = sprintf('%d\nn = %d',gruppen(j),numel(v));
+        if isempty(v), continue; end
+        jitter = 0.10*sin((1:numel(v))'*2.39996);
+        scatter(j+jitter,v,17,farben{k},'filled', ...
+            'MarkerFaceAlpha',0.45,'HandleVisibility','off');
+        plot(j,mean(v),'d','Color',orange,'MarkerFaceColor',orange, ...
+            'MarkerSize',7,'HandleVisibility','off');
+        plot([j-0.17 j+0.17],[median(v) median(v)],'-', ...
+            'Color',farben{k},'LineWidth',2.4,'HandleVisibility','off');
+        sd=NaN; if numel(v)>1, sd=std(v); end
+        neu = table(string(namen{k}),gruppen(j),numel(v),mean(v), ...
+            median(v),sd,min(v),max(v),'VariableNames', ...
+            {'Groesse','Impulse','N','Mittelwert_s','Median_s','SD_s','Minimum_s','Maximum_s'});
+        Impulsvergleich = [Impulsvergleich;neu]; %#ok<AGROW>
+    end
+    yline(soll(k),':','Referenz','Color',grau,'HandleVisibility','off');
+    xticks(1:numel(gruppen)); xticklabels(labels);
+    xlim([0.5 numel(gruppen)+0.5]);
+    xlabel('Erkannte Impulse im Block'); ylabel('Dauer [s]');
+    title(namen{k}); grid on; box off
+end
+title(tl,'Zusammenhang mit der erkannten Impulszahl');
+subtitle(tl,'Punkte: Bloecke | Raute: Mittelwert | Querstrich: Median | Box: mittlere 50 %');
+
+%% 8. Grafik 4: Wiederholbarkeit anhand der Aufnahmemittelwerte
+fig4 = figure('Color','w','Position',[100 60 1050 740]);
+tl4 = tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
+aufnahmeWerte = {mean(Frequenz,2),mean(Stim,2),mean(Pause,2),mean(Zyklus,2)};
+titel4 = {'Stimulationsfrequenz','Stimulation (periodenbasiert)', ...
+    'Pause (rechnerisch)','Zyklus (Start zu Start)'};
+einheiten4 = {'Hz','s','s','s'}; soll4 = [fSoll 30 30 zyklusSoll];
+for k = 1:4
+    nexttile; hold on
+    v = aufnahmeWerte{k};
+    hA = plot(1:nG,v,'o','Color',blau,'MarkerFaceColor',blau,'MarkerSize',7);
+    hM = yline(mean(v),'-','Color',orange,'LineWidth',1.5);
+    hD = yline(median(v),'--','Color',gruen,'LineWidth',1.5);
+    hS = yline(soll4(k),':','Color',grau,'LineWidth',1.2);
+    sd = NaN; if nG>1, sd=std(v); end
+    title(titel4{k});
+    subtitle(sprintf('Mittel %.5f | Median %.5f | SD %.5f %s', ...
+        mean(v),median(v),sd,einheiten4{k}));
+    ylabel(einheiten4{k}); xlabel('Aufnahme (Reihenfolge siehe CSV)');
+    xticks(1:nG); xlim([0.5 nG+0.5]);
+    if k==1
+        legend([hA hM hD hS],{'Aufnahmemittelwert','Mittelwert','Median','Referenz'}, ...
+            'Location','best','Box','off');
+    end
+    grid on; box off
+end
+title(tl4,sprintf('Vergleich der %d Aufnahmen',nG));
+subtitle(tl4,'Jeder Punkt = eine Aufnahme | SD beschreibt die Streuung zwischen Aufnahmemittelwerten');
+
+%% 9. Phasenspektrum der Rohspannung
+% Bezug = erstes gespeichertes Rohsample jeder CSV-Datei.
+% KEINE Verzoegerung gegen ein ideales 30/30-Signal und KEINE Latenz
+% gegen einen externen Startbefehl. Verschiedene Aufnahme-Startzeiten
+% verschieben deshalb die Phase.
+% Schwache Frequenzanteile haben keine stabil interpretierbare Phase.
+% Keine lineare Winkelmittelung: +179 und -179 Grad ergeben etwa 180,
+% nicht 0 Grad. Deshalb kreisfoermiger Mittelwert der Einheitszeiger.
+PhaseGueltig = Spektren>=phaseMinLeistung & ...
+    isfinite(KomplexSpektren) & abs(KomplexSpektren)>0;
+PhaseEinzel_deg = rad2deg(angle(KomplexSpektren));
+PhaseEinzel_deg(~PhaseGueltig) = NaN;
+Einheitszeiger = complex(zeros(size(KomplexSpektren)));
+Einheitszeiger(PhaseGueltig) = ...
+    KomplexSpektren(PhaseGueltig)./abs(KomplexSpektren(PhaseGueltig));
+PhaseN = sum(PhaseGueltig,2);
+ZeigerMittel = sum(Einheitszeiger,2)./max(PhaseN,1);
+PhaseR = abs(ZeigerMittel); % 0: Richtungen heben sich auf; 1: gleiche Phase
+PhaseR(PhaseN==0) = NaN;
+PhaseMittel_deg = rad2deg(angle(ZeigerMittel));
+phaseMinAufnahmen = max(1,ceil(nG/2));
+PhaseAnzeige = PhaseN>=phaseMinAufnahmen & PhaseR>=phaseMinR;
+PhaseMittel_deg(~PhaseAnzeige) = NaN;
+
+% Detailansicht: oben Leistung als Orientierung, darunter die Phase.
+% Linearer Frequenzmassstab in zwei getrennten Zoomfenstern.
+% Keine Glaettung; Luecken und Spruenge bei +/-180 Grad bleiben sichtbar.
+fig5 = figure('Color','w','Position',[70 70 1200 790]);
+phaseLayout = tiledlayout(fig5,3,2,'TileSpacing','compact','Padding','compact');
+phaseFenster = [0.010 0.024; fGemeinsam(iStim)-0.035 fGemeinsam(iStim)+0.035];
+phasePeaks = [iBlock iStim];
+phaseTitel = {'Blockrhythmus','Stimulationsrhythmus'};
+phaseFarben = lines(nG);
+phaseLegende = gobjects(nG+1,1);
+phaseNamen = strings(nG+1,1);
+for j = 1:nG
+    phaseNamen(j) = Datei(j);
+end
+phaseNamen(end) = "Kreisfoermiger Mittelwert";
+for bereich = 1:2
+    fenster = fGemeinsam>=phaseFenster(bereich,1) & ...
+              fGemeinsam<=phaseFenster(bereich,2);
+    fx = fGemeinsam(fenster);
+    ip = phasePeaks(bereich);
+
+    % Leistung hilft zu erkennen, wo die Phase interpretierbar ist.
+    axPower = nexttile(phaseLayout,bereich);
+    area(axPower,fx,mittelP(fenster),'FaceColor',blau, ...
+        'FaceAlpha',0.10,'EdgeColor',blau,'LineWidth',1.5);
+    hold(axPower,'on');
+    xline(axPower,fGemeinsam(ip),':','Color',grau,'LineWidth',1);
+    xlim(axPower,phaseFenster(bereich,:));
+    ylim(axPower,[0 max(mittelP(fenster))*1.18]);
+    ylabel(axPower,'Relative Leistung');
+    title(axPower,phaseTitel{bereich},'FontSize',14,'FontWeight','bold');
+    subtitle(axPower,sprintf('FFT-Peak bei %.5f Hz',fGemeinsam(ip)));
+    set(axPower,'XTickLabel',[],'Box','off','Color',[0.985 0.989 0.994]);
+    grid(axPower,'on');
+
+    axP = nexttile(phaseLayout,bereich+2,[2 1]); hold(axP,'on');
+    for j = 1:nG+1
+        if j<=nG
+            v = PhaseEinzel_deg(fenster,j);
+            farbe = 0.30+0.70*phaseFarben(j,:);
+            breite = 1.1; stil = '-';
+        else
+            v = PhaseMittel_deg(fenster);
+            farbe = [0.10 0.18 0.27]; breite = 2.5; stil = '-';
+        end
+        % Jeden Punkt erhalten, aber Verbindung ueber Winkelspruenge trennen.
+        sprung = find(abs(diff(v))>180);
+        xd = repelem(fx,2); yd = repelem(v,2);
+        xd(2*sprung) = NaN;
+        h = plot(axP,xd,yd,stil,'Color',farbe,'LineWidth',breite);
+        % Isolierte gueltige Werte sind auch ohne Liniensegment sichtbar.
+        isoliert = isfinite(v) & [true;~isfinite(v(1:end-1))] & ...
+                    [~isfinite(v(2:end));true];
+        plot(axP,fx(isoliert),v(isoliert),'.','Color',farbe, ...
+             'MarkerSize',8,'HandleVisibility','off');
+        if bereich==1, phaseLegende(j)=h; end
+    end
+    xline(axP,fGemeinsam(ip),':','Color',grau,'HandleVisibility','off');
+    yline(axP,0,':','Color',[0.65 0.69 0.73],'HandleVisibility','off');
+    xlim(axP,phaseFenster(bereich,:)); ylim(axP,[-195 195]);
+    yticks(axP,-180:90:180);
+    yticklabels(axP,{'-180','-90','0','90','180'});
+    ylabel(axP,'Phase [Grad]'); xlabel(axP,'Frequenz [Hz]');
+    if bereich==1, xtickformat(axP,'%.3f'); else, xtickformat(axP,'%.2f'); end
+    set(axP,'Box','off','Color',[0.985 0.989 0.994]); grid(axP,'on');
+    if PhaseAnzeige(ip)
+        info = sprintf('Am FFT-Peak: %.1f Grad | n = %d | R = %.2f', ...
+            PhaseMittel_deg(ip),PhaseN(ip),PhaseR(ip));
+    else
+        info = sprintf('Am FFT-Peak: kein angezeigter Mittelwert | n = %d',PhaseN(ip));
+    end
+    title(axP,info,'FontWeight','normal','FontSize',10);
+end
+lgPhase = legend(ancestor(phaseLegende(1),'axes'),phaseLegende, ...
+    cellstr(phaseNamen),'Orientation','horizontal', ...
+    'NumColumns',min(nG+1,5),'Box','off','Interpreter','none');
+lgPhase.Layout.Tile = 'south';
+title(phaseLayout,'Phase im Detail','FontSize',19,'FontWeight','bold');
+subtitle(phaseLayout,sprintf([ ...
+    'Zeitnull: erstes Rohsample jeder CSV | Phase ohne Glaettung\n' ...
+    'Anzeige ab %.1f %% Leistung; Mittelwert ab n = %d und R = %.2f'], ...
+    100*phaseMinLeistung,phaseMinAufnahmen,phaseMinR));
+
+PhaseTabelle = table(fGemeinsam,PhaseMittel_deg,PhaseR,PhaseN,PhaseAnzeige, ...
+    'VariableNames',{'Frequenz_Hz','Zirkulaerer_Mittelwert_Grad', ...
+    'R_Phasenkonzentration','N_gueltige_Aufnahmen','Mittelwert_angezeigt'});
+for j = 1:nG
+    PhaseTabelle.(sprintf('Phase_Aufnahme_%d_Grad',j)) = PhaseEinzel_deg(:,j);
+end
+
+%% 10. Einheitlicher Stil und Export
+figuren = [fig1 fig2 fig3 fig4 fig5];
+for j = 1:numel(figuren)
+    ax = findall(figuren(j),'Type','axes');
+    set(ax,'FontName','Arial','FontSize',10,'LineWidth',0.8, ...
+        'GridAlpha',0.10,'XMinorGrid','off','YMinorGrid','off', ...
+        'TickDir','out');
+end
+
+stempel = char(datetime('now','Format','yyyyMMdd_HHmmss_SSS'));
+ziel = fullfile(ordner,['SEP_Auswertung_' stempel]); mkdir(ziel);
+bildnamen = {'01_FFT_gemeinsam','02_Zeitfehler','03_Impulszahlvergleich', ...
+    '04_Aufnahmevergleich','05_Phasenspektrum'};
+for j = 1:numel(figuren)
+    exportgraphics(figuren(j),fullfile(ziel,[bildnamen{j} '.png']),'Resolution',300);
+    savefig(figuren(j),fullfile(ziel,[bildnamen{j} '.fig']));
+end
+writetable(Qualitaet,fullfile(ziel,'01_Qualitaet.csv'));
+writetable(ProAufnahme,fullfile(ziel,'02_Pro_Aufnahme.csv'));
+writetable(Blockdaten,fullfile(ziel,'03_Blockdaten.csv'));
+writetable(Statistik,fullfile(ziel,'04_Statistik.csv'));
+writetable(Impulsvergleich,fullfile(ziel,'05_Impulszahlvergleich.csv'));
+FFT = table(fGemeinsam,mittelP,medianP,'VariableNames', ...
+    {'Frequenz_Hz','Mittlere_relative_Leistung','Mediane_relative_Leistung'});
+writetable(FFT,fullfile(ziel,'06_FFT.csv'));
+writetable(PhaseTabelle,fullfile(ziel,'07_Phasenspektrum.csv'));
+save(fullfile(ziel,'SEP_Ergebnisse.mat'),'Qualitaet','ProAufnahme', ...
+    'Blockdaten','Statistik','Impulsvergleich','FFT','Spektren', ...
+    'KomplexSpektren','PhaseTabelle','PhaseEinzel_deg', ...
+    'phaseMinLeistung','phaseMinR','phaseMinAufnahmen', ...
+    'Impulse','Frequenz','Stim','Pause','Zyklus','Startfehler', ...
+    'Datei','schwelle','polaritaet','minAbstand','blockLuecke', ...
+    'minImpulse','nBloecke','fGemeinsam','fSoll','zyklusSoll');
+
+fid = fopen(fullfile(ziel,'BITTE_LESEN.txt'),'w');
+if fid>=0
+    fprintf(fid,[ ...
+        'Nur Referenzaufnahmen mit gleichen Einstellungen gemeinsam auswerten.\n' ...
+        'FFT: direkt aus allen Rohspannungswerten jeder CSV.\n' ...
+        'Keine Filterung, kein Hann-Fenster, kein Ereignisraster, kein Zero-Padding.\n' ...
+        'Vor der FFT wird nur der Gleichanteil der Rohspannung entfernt.\n' ...
+        'Das langsame Ein-/Ausschalten des Impulszugs kann den Blockrhythmus erzeugen.\n' ...
+        'Die Leistung wird pro Aufnahme normiert; keine absolute Amplitudenaussage.\n' ...
+        'Jede Aufnahme wird ueber denselben gesamten Frequenzbereich normiert.\n' ...
+        'Danach werden Leistungen gemittelt; Median ist punktweise berechnet.\n' ...
+        'Logarithmische x-Achse: gleiche Strecken bedeuten gleiche Frequenzverhaeltnisse.\n' ...
+        'Nebenpeaks/Oberwellen werden nicht entfernt. FFT-Peaks sind keine Praezisionszeitmessung.\n' ...
+        'Durch Blockunterbrechungen und Phasenlagen kann das FFT-Maximum von 1/Median(Impulsabstand) abweichen.\n' ...
+        'Zeitfenster: erster bis letzter erkannter Impuls, keine erfundene letzte Pause.\n' ...
+        'Stimulation: letzter minus erster Impulsbeginn plus medianer Impulsabstand.\n' ...
+        'Pause: Start-zu-Start-Zyklus minus diese periodenbasierte Stimulation.\n' ...
+        'Diese beiden Groessen sind abgeleitet; keine gemessenen Programmendmarker.\n' ...
+        'Frequenz pro Block: Kehrwert des medianen Impulsabstands.\n' ...
+        'Startfehler: relative Blockstarts minus 60-s-Raster. Block 9 umfasst acht Zyklen.\n' ...
+        'Gesamtdauer: neunmal Zyklusmedian, HOCHRECHNUNG ohne letzten Endmarker.\n' ...
+        'Grafik 2: SD zwischen Aufnahmen, kein Konfidenzintervall.\n' ...
+        'Grafik 3: Bloecke sind innerhalb von Aufnahmen verschachtelt, nicht unabhaengige Versuche.\n' ...
+        'Grafik 4: Mittel/Median/SD der Aufnahmemittelwerte, nicht aller Einzelimpulse.\n' ...
+        'Bei n=1 ist keine Streuung zwischen Aufnahmen bestimmbar.\n' ...
+        'Statistik-CSV trennt gepoolte Bloecke und Aufnahmemittelwerte.\n' ...
+        'Grafik 5: zwei Detailfenster fuer Block- und Impulsrhythmus; oben Leistung, unten Phase.\n' ...
+        'Phase der direkten Rohspannungs-FFT in Grad (-180 bis +180), ohne Glaettung.\n' ...
+        'Linien werden bei Datenluecken und Winkelspruengen getrennt. Farben bezeichnen Aufnahmen.\n' ...
+        'Die CSV enthaelt weiterhin den gesamten ausgewerteten Frequenzbereich.\n' ...
+        'Zeitnull ist das erste gespeicherte Rohsample jeder CSV-Datei.\n' ...
+        'KEINE Phase gegen ein ideales Signal, keine absolute Startlatenz.\n' ...
+        'Komplexe FFT-Koeffizienten werden auf das gemeinsame Frequenzraster interpoliert.\n' ...
+        'Schwache Anteile werden nur in der Phasendarstellung ausgeblendet; Leistung bleibt unveraendert.\n' ...
+        'Phasen werden kreisfoermig gemittelt, ohne Amplitudengewichtung.\n' ...
+        'R ist die Laenge des mittleren Einheitszeigers, keine Signifikanz oder Konfidenz.\n' ...
+        'R nahe 1: aehnliche Phasen; R nahe 0: keine eindeutige gemeinsame Richtung.\n' ...
+        'Die Darstellungsschwellen sind einstellbar, keine statistischen Nachweisgrenzen.\n' ...
+        'Phasenspruenge bei +/-180 Grad sind normale Winkeldarstellung.\n' ...
+        'Keine Umrechnung der Phasen in eine globale Zeitverschiebung.\n' ...
+        'Keine Fallflanken-/Impulsbreitenpruefung in diesem Skript.\n' ...
+        'Eine Mindestimpulszahl beweist keinen vollstaendigen Block. Warnungen beachten.\n']);
+    fclose(fid);
+end
+skriptPfad = mfilename('fullpath');
+if ~isempty(skriptPfad) && isfile([skriptPfad '.m'])
+    copyfile([skriptPfad '.m'],fullfile(ziel,'Verwendeter_Code.m'));
+end
+disp(ProAufnahme); disp(Statistik);
+fprintf('\nFERTIG. Bilder und Tabellen unter:\n%s\n',ziel);
