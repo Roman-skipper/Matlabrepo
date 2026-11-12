@@ -1,0 +1,26 @@
+dateien = {'auf1.csv','auf2.csv','auf3.csv','auf4.csv'};
+tInc = 1e-5;
+
+f = (0:0.001:6)';
+A = nan(length(f),length(dateien));
+
+for k = 1:length(dateien)
+
+    M = readmatrix(dateien{k},'NumHeaderLines',1);
+    u = M(:,1); u = u(isfinite(u));
+
+    N = length(u); Y = fft(u-mean(u));
+    fEinzeln = (0:floor(N/2)-1)'/(N*tInc);
+    YEinzeln = abs(Y(1:floor(N/2)))/N;
+
+    A(:,k) = interp1(fEinzeln,YEinzeln,f);
+
+end
+
+plot(f,A,'Color',[0.8 0.8 0.8]); hold on
+h1 = plot(f,mean(A,2,'omitnan'),'b','LineWidth',2);
+h2 = plot(f,median(A,2,'omitnan'),'r','LineWidth',2);
+
+xlim([0 6]); grid on
+xlabel('Frequenz [Hz]'); ylabel('FFT-Betrag');
+legend([h1 h2],{'Mittelwert','Median'});
