@@ -1,6 +1,16 @@
-M=readmatrix('auf1.csv','NumHeaderLines',1); u=M(:,1); u=u(isfinite(u)); t=(0:length(u)-1)'*1e-5;
-s=(min(u)+max(u))/2; p=t(find(u(1:end-1)<=s & u(2:end)>s)+1);
-p=p([true;diff(p)>0.1]);
-a=[1;find(diff(p)>2)+1]; e=[a(2:end)-1;length(p)];
-Block=(1:length(a))'; Anfang=p(a); Ende=p(e); Stimuli=e-a+1;
-disp(table(Block,Anfang,Ende,Stimuli)); fprintf('Blöcke: %d\n',length(a));
+M = readmatrix('auf1.csv','NumHeaderLines',1);
+u = M(:,1);
+u = u(isfinite(u));
+
+N = length(u);
+X = fft(u-mean(u));
+
+phi = rad2deg(angle(X));
+phi(abs(X) < 0.05*max(abs(X))) = NaN;
+
+figure;
+plot(phi,'.');
+ylim([-180 180]);
+xlabel('FFT-Punkt');
+ylabel('Phase [Grad]');
+grid on;
