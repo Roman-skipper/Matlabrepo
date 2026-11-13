@@ -1,52 +1,22 @@
-clear; clc; close all
+fs = 100;
+t = 0:1/fs:540-1/fs;
+y = double(mod(t,60)<30);
 
-%% Messung einlesen
-M = readmatrix('auf1.csv','NumHeaderLines',1);
-u = M(:,1);
-u = u(isfinite(u));
+N = length(y);
+Y = fft(y);
+f = (0:N/2)*fs/N;
+A = abs(Y(1:N/2+1))/N;
+A(2:end-1) = 2*A(2:end-1);
+phi = rad2deg(angle(Y(1:N/2+1)));
+phi(A<1e-6) = NaN;
 
-tInc = 1e-5;
-
-%% Ideales Signal simulieren
-Fs = 1000;
-t = 0:1/Fs:540-1/Fs;
-y = zeros(size(t));
-
-for block = 0:8
-    p = block*60 + (0:137)/4.6;
-    idx = round(p*Fs)+1;
-    y(idx) = 1;
-end
-
-%% FFT der Messung
-N1 = length(u);
-X1 = fft(u-mean(u));
-
-f1 = (0:floor(N1/2)-1)/(N1*tInc);
-A1 = abs(X1(1:floor(N1/2)));
-
-%% FFT der Simulation
-N2 = length(y);
-X2 = fft(y-mean(y));
-
-f2 = (0:floor(N2/2)-1)*Fs/N2;
-A2 = abs(X2(1:floor(N2/2)));
-
-%% Nur 0 bis 6 Hz auswählen
-k1 = f1 <= 6;
-k2 = f2 <= 6;
-
-A1 = A1/max(A1(k1));
-A2 = A2/max(A2(k2));
-
-%% Beide FFTs vergleichen
 figure;
-plot(f1(k1),A1(k1),'b'); hold on
-plot(f2(k2),A2(k2),'r')
-xline(4.6,'--k','4,6 Hz')
+subplot(3,1,1);
+plot(t,y); ylim([-0.1 1.1]); xlabel('Zeit (s)');
 
-xlabel('Frequenz [Hz]')
-ylabel('Normierter FFT-Betrag')
-legend('Aufnahme','Ideale Simulation')
-xlim([0 6])
-grid on
+subplot(3,1,2);
+stem(f,A,'.'); xlim([0 0.2]); ylabel('Amplitude');
+
+subplot(3,1,3);
+stem(f,phi,'.'); xlim([0 0.2]);
+ylabel('Phase (°)'); xlabel('Frequenz (Hz)');
