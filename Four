@@ -20,3 +20,29 @@ stem(f,A,'.'); xlim([0 0.2]); ylabel('Amplitude');
 subplot(3,1,3);
 stem(f,phi,'.'); xlim([0 0.2]);
 ylabel('Phase (°)'); xlabel('Frequenz (Hz)');
+
+fs = 1/1e-5; % Abtastintervall deiner Messung: 10 µs
+M = readmatrix('auf1.csv','NumHeaderLines',1);
+y = M(:,1);
+y = y(isfinite(y));
+t = (0:length(y)-1)/fs;
+
+N = length(y);
+Y = fft(y);
+k = 1:floor(N/2)+1;
+f = (k-1)*fs/N;
+A = abs(Y(k))/N;
+A(2:ceil(N/2)) = 2*A(2:ceil(N/2));
+phi = rad2deg(angle(Y(k)));
+phi(A<0.01*max(A)) = NaN;
+
+figure;
+subplot(3,1,1);
+plot(t,y); xlabel('Zeit (s)');
+
+subplot(3,1,2);
+plot(f,A); xlim([0 0.2]); ylabel('Amplitude');
+
+subplot(3,1,3);
+plot(f,phi,'.'); xlim([0 0.2]);
+ylabel('Phase (°)'); xlabel('Frequenz (Hz)');
