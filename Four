@@ -1,16 +1,29 @@
 M = readmatrix('auf1.csv','NumHeaderLines',1);
 u = M(:,1);
 u = u(isfinite(u));
+t =0:0.1::540
+y = mod(t,60) < 30;
+
+v = stairs (t,y)
 
 N = length(u);
 X = fft(u-mean(u));
 
-phi = rad2deg(angle(X));
+
+
+f = (0:N-1)/(N*1e-5);
+
+phi = (rad2deg(angle(X)));
 phi(abs(X) < 0.05*max(abs(X))) = NaN;
 
 figure;
-plot(phi,'.');
+plot(f,phi,'.');
 ylim([-180 180]);
-xlabel('FFT-Punkt');
+xlabel('Hz');
 ylabel('Phase [Grad]');
+
 grid on;
+
+figure;
+plot(f(1:floor(N/2)),abs(X(1:floor(N/2))));
+xlim([0 6]);
