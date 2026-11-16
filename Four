@@ -1,46 +1,38 @@
-fs = 100;
-t = 0:1/fs:540-1/fs;
-y = double(mod(t,60)<30);
-
-N = length(y);
-Y = fft(y);
-f = (0:N/2)*fs/N;
-A = abs(Y(1:N/2+1))/N;
-A(2:end-1) = 2*A(2:end-1);
-phi = rad2deg(angle(Y(1:N/2+1)));
-phi(A<1e-6) = NaN;
-
-figure;
-subplot(3,1,1);
-plot(t,y); ylim([-0.1 1.1]); xlabel('Zeit (s)');
-
-subplot(3,1,2);
-stem(f,A,'.'); xlim([0 0.2]); ylabel('Amplitude');
-
-subplot(3,1,3);
-stem(f,phi,'.'); xlim([0 0.2]);
-ylabel('Phase (°)'); xlabel('Frequenz (Hz)');
-
-%%jz mit der csv Datei
-
-M = readmatrix('auf2.csv');
-y = M(:,1);                 % Spalte mit Spannungswerten
+M = readmatrix('auf1.csv','NumHeaderLines',1);
+y = M(:,1);
 y = y(isfinite(y));
-fs = 100000;                % Abtastrate: 10 µs pro Messpunkt
 
+fs = 100000;
 N = length(y);
 Y = fft(y-mean(y));
-k = 2:floor(N/2);           % Ohne Gleichanteil bei 0 Hz
+
+k = 2:floor(N/2);
 f = (k-1)*fs/N;
+A = 2*abs(Y(k))/N;
+phi = rad2deg(angle(Y(k)));
+
+% Nur Bereich bis 20 Hz
+b = f <= 20;
+f = f(b);
+A = A(b);
+phi = phi(b);
+
+% Nur deutliche FFT-Peaks finden
+df = f(2)-f(1);
+[~,peaks] = findpeaks(A, ...
+    'MinPeakProminence',0.1*max(A), ...
+    'MinPeakDistance',round(3/df));
 
 figure;
-subplot(2,1,1);
-plot(f,2*abs(Y(k))/N);
-xlim([0 20]); grid on;
-xlabel('Frequenz (Hz)'); ylabel('Amplitude');
 
-subplot(2,1,2);
-plot(f,rad2deg(angle(Y(k))),'.');
-xlim([0 20]); grid on;
-xlabel('Frequenz (Hz)'); ylabel('Phase (°)');
-ylabel('Phase (°)'); xlabel('Frequenz (Hz)');
+subplot(2,1,1)
+plot(f,A)
+ylabel('Amplitude')
+grid on
+
+subplot(2,1,2)
+stem(f(peaks),phi(peaks),'filled')
+ylim([-180 180])
+xlabel('Frequenz [Hz]')
+ylabel('Phase [°]')
+grid on
