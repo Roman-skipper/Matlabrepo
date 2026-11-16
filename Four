@@ -1,3 +1,5 @@
+clear; close all; clc
+
 M = readmatrix('auf1.csv','NumHeaderLines',1);
 y = M(:,1);
 y = y(isfinite(y));
@@ -11,27 +13,28 @@ f = (k-1)*fs/N;
 A = 2*abs(Y(k))/N;
 phi = rad2deg(angle(Y(k)));
 
-% Nur Bereich bis 20 Hz
-b = f <= 20;
-f = f(b);
-A = A(b);
-phi = phi(b);
+% Peak bei 4,6 Hz und den drei Oberwellen suchen
+fZiel = 4.6*(1:4);
+peak = zeros(size(fZiel));
 
-% Nur deutliche FFT-Peaks finden
-df = f(2)-f(1);
-[~,peaks] = findpeaks(A, ...
-    'MinPeakProminence',0.1*max(A), ...
-    'MinPeakDistance',round(3/df));
+for n = 1:4
+    bereich = abs(f-fZiel(n)) < 0.5;
+    stellen = find(bereich);
+    [~,p] = max(A(bereich));
+    peak(n) = stellen(p);
+end
 
 figure;
 
 subplot(2,1,1)
 plot(f,A)
+xlim([0 20])
 ylabel('Amplitude')
 grid on
 
 subplot(2,1,2)
-stem(f(peaks),phi(peaks),'filled')
+stem(f(peak),phi(peak),'filled')
+xlim([0 20])
 ylim([-180 180])
 xlabel('Frequenz [Hz]')
 ylabel('Phase [°]')
