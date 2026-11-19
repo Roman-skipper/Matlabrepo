@@ -2,10 +2,18 @@ clear; close all; clc
 
 %% Vier Rohaufnahmen auswählen
 [dateien,ordner] = uigetfile('*.csv', ...
-    'Vier Rohaufnahmen auswählen','MultiSelect','on');
+    'Vier Rohaufnahmen auswählen', ...
+    'MultiSelect','on');
 
-if isequal(dateien,0), return; end
-if ischar(dateien), dateien = {dateien}; end
+if isequal(dateien,0)
+    return
+end
+
+if ischar(dateien)
+    dateien = {dateien};
+end
+
+dateien = dateien(:);
 
 if length(dateien) ~= 4
     error('Bitte genau vier CSV-Dateien auswählen.')
@@ -13,6 +21,7 @@ end
 
 %% Einstellungen
 fs = 100000;
+
 fZiel = [1/60 4.6 9.2 13.8 18.4];
 suchbreite = [0.006 0.5 0.5 0.5 0.5];
 
@@ -30,41 +39,67 @@ AAlle = cell(4,1);
 fPeak = zeros(4,5);
 APeak = zeros(4,5);
 phaseMessung = zeros(4,5);
+polaritaet = zeros(4,1);
 
 %% Direkte FFT aller vier Rohaufnahmen
 for m = 1:4
 
+    %% Rohdatei laden
     M = readmatrix(fullfile(ordner,dateien{m}), ...
         'NumHeaderLines',1);
 
     y = M(:,1);
     y = y(isfinite(y));
 
+    %% FFT der Rohspannung
     N = length(y);
     Y = fft(y-mean(y));
 
-    % Nur Frequenzen bis 20 Hz
+    % Nur Bereich bis 20 Hz übernehmen
     k = (2:floor(20*N/fs)+1)';
     f = (k-1)*fs/N;
 
     Y20 = Y(k);
+
     A = 2*abs(Y20)/N;
     A = A/max(A);
 
-    %% Gemeinsamer Zeitnullpunkt: erster echter Rohimpuls
-    ersterImpuls = find(y < -10,1);
+    %% Polarität und ersten Impuls automatisch erkennen
+    basis = median(y);
 
-    if isempty(ersterImpuls)
-        error('%s: Kein Impuls unter -10 V erkannt.',dateien{m})
+    ausschlagOben = max(y)-basis;
+    ausschlagUnten = basis-min(y);
+
+    if ausschlagOben >= ausschlagUnten
+
+        polaritaet(m) = 1;
+        schwelle = basis + 0.5*ausschlagOben;
+        ersterImpuls = find(y > schwelle,1);
+
+    else
+
+        polaritaet(m) = -1;
+        schwelle = basis - 0.5*ausschlagUnten;
+        ersterImpuls = find(y < schwelle,1);
+
     end
 
+    if isempty(ersterImpuls)
+        error('%s: Kein Impuls automatisch erkannt.', ...
+            dateien{m})
+    end
+
+    fprintf('%s: Schwelle %.3f V, Polarität %d\n', ...
+        dateien{m},schwelle,polaritaet(m));
+
+    %% Ersten Impuls als gemeinsamen Zeitnullpunkt verwenden
     t0 = (ersterImpuls-1)/fs;
 
-    % Nur Phasenreferenz verschieben – Rohsignal bleibt unverändert
+    % Nur Phasenreferenz verschieben
     Ybezogen = Y20 .* exp(1i*2*pi*f*t0);
     phi = rad2deg(angle(Ybezogen));
 
-    %% Dominante Peaks suchen
+    %% Blockpeak, 4,6 Hz und Oberwellen suchen
     for n = 1:length(fZiel)
 
         bereich = abs(f-fZiel(n)) < suchbreite(n);
@@ -76,6 +111,7 @@ for m = 1:4
         fPeak(m,n) = f(punkt);
         APeak(m,n) = A(punkt);
         phaseMessung(m,n) = phi(punkt);
+
     end
 
     fAlle{m} = f;
@@ -84,57 +120,76 @@ for m = 1:4
     clear M y Y Y20
 end
 
-%% Idealsignal: 9 Blöcke, 138 Impulse, 4,6 Hz
+%% Idealsignal definieren
+% 9 Blöcke, 138 Impulse pro Block, Abstand 1/4,6 s
 pIdeal = [];
 
 for block = 0:8
     pIdeal = [pIdeal, block*60 + (0:137)/4.6];
 end
 
-% Idealphase jeweils genau an der gemessenen Peakfrequenz
+%% Idealphase an den jeweiligen Peakfrequenzen
 phaseIdeal = zeros(4,5);
 
 for m = 1:4
+
     for n = 1:5
 
-        Xideal = -sum(exp(-1i*2*pi*fPeak(m,n)*pIdeal));
+        Xideal = polaritaet(m) * ...
+            sum(exp(-1i*2*pi*fPeak(m,n)*pIdeal));
+
         phaseIdeal(m,n) = rad2deg(angle(Xideal));
+
     end
 end
 
-%% Phasendifferenz korrekt auf -180 bis +180 begrenzen
+%% Phasendifferenz auf -180° bis +180° begrenzen
 phaseDifferenz = rad2deg(angle(exp( ...
     1i*deg2rad(phaseMessung-phaseIdeal))));
 
 %% Paper-Abbildung
-fig = figure('Color','w','Position',[80 80 1100 720]);
-tl = tiledlayout(2,1,'TileSpacing','compact', ...
+fig = figure('Color','w', ...
+    'Position',[80 80 1100 720]);
+
+tl = tiledlayout(2,1, ...
+    'TileSpacing','compact', ...
     'Padding','compact');
 
-%% Amplitudenspektren der vier Rohaufnahmen
+%% Amplitudenspektren
 ax1 = nexttile;
 hold on
 
 h = gobjects(4,1);
 
 for m = 1:4
+
     h(m) = semilogx(fAlle{m},AAlle{m}, ...
-        'Color',farben(m,:),'LineWidth',1.2);
+        'Color',farben(m,:), ...
+        'LineWidth',1.2);
 
     plot(fPeak(m,:),APeak(m,:),'o', ...
         'Color',farben(m,:), ...
         'MarkerFaceColor',farben(m,:), ...
+        'MarkerSize',6, ...
         'HandleVisibility','off');
+
 end
 
-xline(1/60,':','Blockrhythmus','Color',grau);
-xline(4.6,':','4,6 Hz','Color',grau);
+xline(1/60,':','Blockrhythmus', ...
+    'Color',grau);
+
+xline(4.6,':','4,6 Hz', ...
+    'Color',grau);
 
 xlim([0.008 20])
 ylabel('Relative Amplitude')
 title('Direkte FFT der vier Rohaufnahmen')
-legend(h,dateien,'Interpreter','none', ...
-    'Location','northwest','Box','off')
+
+legend(h,dateien, ...
+    'Interpreter','none', ...
+    'Location','northwest', ...
+    'Box','off')
+
 grid on
 box off
 
@@ -147,42 +202,65 @@ for m = 1:4
     b(m).FaceColor = farben(m,:);
 end
 
-yline(0,':','Ideal','Color',grau);
+yline(0,':','Ideal', ...
+    'Color',grau);
+
 ylim([-180 180])
 yticks(-180:90:180)
 
 xticks(1:5)
 xticklabels({'Block','4,6 Hz','9,2 Hz', ...
-              '13,8 Hz','18,4 Hz'})
+    '13,8 Hz','18,4 Hz'})
 
 xlabel('Dominanter FFT-Peak')
 ylabel('Phasendifferenz zum Ideal [°]')
 title('Phasenvergleich mit dem Idealsignal')
+
+legend(dateien, ...
+    'Interpreter','none', ...
+    'Location','best', ...
+    'Box','off')
+
 grid on
 box off
 
-%% Gemeinsames Design
-title(tl,'FFT- und Phasenvergleich der vier SEP-Aufnahmen', ...
+%% Design
+title(tl, ...
+    'FFT- und Phasenvergleich der vier SEP-Aufnahmen', ...
     'FontSize',18)
 
 subtitle(tl, ...
-    'Direkte Rohspannungs-FFT | Ideal: 9 × 138 Impulse bei 4,6 Hz')
+    ['Direkte Rohspannungs-FFT | Ideal: ', ...
+     '9 × 138 Impulse bei 4,6 Hz'])
 
-set([ax1 ax2],'FontName','Arial','FontSize',11, ...
-    'LineWidth',0.8,'GridAlpha',0.12, ...
-    'TickDir','out','Color',[0.985 0.989 0.994]);
+set([ax1 ax2], ...
+    'FontName','Arial', ...
+    'FontSize',11, ...
+    'LineWidth',0.8, ...
+    'GridAlpha',0.12, ...
+    'TickDir','out', ...
+    'Color',[0.985 0.989 0.994]);
 
 %% Ergebnistabelle
-Ergebnis = table(string(dateien(:)), ...
-    phaseDifferenz(:,1),phaseDifferenz(:,2), ...
-    'VariableNames',{'Aufnahme', ...
+Ergebnis = table( ...
+    string(dateien), ...
+    fPeak(:,1), ...
+    fPeak(:,2), ...
+    phaseDifferenz(:,1), ...
+    phaseDifferenz(:,2), ...
+    'VariableNames',{ ...
+    'Aufnahme', ...
+    'Blockpeak_Hz', ...
+    'Impulspeak_Hz', ...
     'Phasendifferenz_Block_Grad', ...
     'Phasendifferenz_4_6Hz_Grad'});
 
 disp(Ergebnis)
 
-%% Speichern
-exportgraphics(fig,'Phasenvergleich_4_Aufnahmen.png', ...
+%% Paper-Bild speichern
+exportgraphics(fig, ...
+    'Phasenvergleich_4_Rohaufnahmen.png', ...
     'Resolution',300);
 
-savefig(fig,'Phasenvergleich_4_Aufnahmen.fig');
+savefig(fig, ...
+    'Phasenvergleich_4_Rohaufnahmen.fig');
