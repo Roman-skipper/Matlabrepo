@@ -1,106 +1,188 @@
 clear; close all; clc
 
-%% Einstellungen
-tInc = 1e-5;
-schwelle = -10;
-Fs = 100;
-
-t = (0:1/Fs:540-1/Fs)';
-ideal = double(mod(t,60) < 30);
-
-Xi = fft(ideal-mean(ideal));
-
-% Grundfrequenz und zwei Oberwellen des 30/30-Signals
-fTest = [1/60 3/60 5/60];
-k = round(fTest*length(t)/Fs)+1;
-
-%% Vier Dateien auswählen
+%% Vier Rohaufnahmen auswählen
 [dateien,ordner] = uigetfile('*.csv', ...
-    'Vier Aufnahmen auswählen','MultiSelect','on');
+    'Vier Rohaufnahmen auswählen','MultiSelect','on');
 
-if ischar(dateien)
-    dateien = {dateien};
-end
+if isequal(dateien,0), return; end
+if ischar(dateien), dateien = {dateien}; end
 
 if length(dateien) ~= 4
-    error('Bitte genau vier Aufnahmen auswählen.')
+    error('Bitte genau vier CSV-Dateien auswählen.')
 end
 
-phaseDiff = zeros(4,3);
+%% Einstellungen
+fs = 100000;
+fZiel = [1/60 4.6 9.2 13.8 18.4];
+suchbreite = [0.006 0.5 0.5 0.5 0.5];
 
-%% Aufnahmen auswerten
+blau   = [0.10 0.36 0.63];
+orange = [0.86 0.40 0.15];
+gruen  = [0.16 0.55 0.44];
+lila   = [0.49 0.38 0.65];
+grau   = [0.55 0.58 0.62];
+
+farben = [blau; orange; gruen; lila];
+
+fAlle = cell(4,1);
+AAlle = cell(4,1);
+
+fPeak = zeros(4,5);
+APeak = zeros(4,5);
+phaseMessung = zeros(4,5);
+
+%% Direkte FFT aller vier Rohaufnahmen
 for m = 1:4
 
     M = readmatrix(fullfile(ordner,dateien{m}), ...
         'NumHeaderLines',1);
 
-    u = M(:,1);
-    u = u(isfinite(u));
+    y = M(:,1);
+    y = y(isfinite(y));
 
-    % Impulsanfänge erkennen
-    idx = find(u(1:end-1) > schwelle & ...
-               u(2:end) <= schwelle)+1;
+    N = length(y);
+    Y = fft(y-mean(y));
 
-    p = (idx-1)*tInc;
-    p = p([true; diff(p)>0.1]);
+    % Nur Frequenzen bis 20 Hz
+    k = (2:floor(20*N/fs)+1)';
+    f = (k-1)*fs/N;
 
-    % Blöcke erkennen
-    a = [1; find(diff(p)>2)+1];
-    e = [a(2:end)-1; length(p)];
+    Y20 = Y(k);
+    A = 2*abs(Y20)/N;
+    A = A/max(A);
 
-    groesse = e-a+1;
-    gut = find(groesse>100);
+    %% Gemeinsamer Zeitnullpunkt: erster echter Rohimpuls
+    ersterImpuls = find(y < -10,1);
 
-    if length(gut) < 9
-        error('%s: weniger als 9 Blöcke erkannt.',dateien{m})
+    if isempty(ersterImpuls)
+        error('%s: Kein Impuls unter -10 V erkannt.',dateien{m})
     end
 
-    a = a(gut(1:9));
-    e = e(gut(1:9));
+    t0 = (ersterImpuls-1)/fs;
 
-    % Ersten Block auf t = 0 setzen
-    start = p(a)-p(a(1));
+    % Nur Phasenreferenz verschieben – Rohsignal bleibt unverändert
+    Ybezogen = Y20 .* exp(1i*2*pi*f*t0);
+    phi = rad2deg(angle(Ybezogen));
 
-    abstand = diff(p);
-    periode = median(abstand(abstand<1));
-    ende = p(e)-p(a(1))+periode;
+    %% Dominante Peaks suchen
+    for n = 1:length(fZiel)
 
-    % Gemessene Blöcke als Rechtecke
-    messung = zeros(size(t));
+        bereich = abs(f-fZiel(n)) < suchbreite(n);
+        stellen = find(bereich);
 
-    for b = 1:9
-        messung(t>=start(b) & t<ende(b)) = 1;
+        [~,p] = max(A(bereich));
+        punkt = stellen(p);
+
+        fPeak(m,n) = f(punkt);
+        APeak(m,n) = A(punkt);
+        phaseMessung(m,n) = phi(punkt);
     end
 
-    %% Phasendifferenz zum Ideal
-    Xm = fft(messung-mean(messung));
+    fAlle{m} = f;
+    AAlle{m} = A;
 
-    phaseDiff(m,:) = rad2deg( ...
-        angle(Xm(k).*conj(Xi(k))));
+    clear M y Y Y20
 end
 
-%% Darstellung
-figure('Color','w','Position',[100 100 950 520])
+%% Idealsignal: 9 Blöcke, 138 Impulse, 4,6 Hz
+pIdeal = [];
 
-bar(phaseDiff')
+for block = 0:8
+    pIdeal = [pIdeal, block*60 + (0:137)/4.6];
+end
+
+% Idealphase jeweils genau an der gemessenen Peakfrequenz
+phaseIdeal = zeros(4,5);
+
+for m = 1:4
+    for n = 1:5
+
+        Xideal = -sum(exp(-1i*2*pi*fPeak(m,n)*pIdeal));
+        phaseIdeal(m,n) = rad2deg(angle(Xideal));
+    end
+end
+
+%% Phasendifferenz korrekt auf -180 bis +180 begrenzen
+phaseDifferenz = rad2deg(angle(exp( ...
+    1i*deg2rad(phaseMessung-phaseIdeal))));
+
+%% Paper-Abbildung
+fig = figure('Color','w','Position',[80 80 1100 720]);
+tl = tiledlayout(2,1,'TileSpacing','compact', ...
+    'Padding','compact');
+
+%% Amplitudenspektren der vier Rohaufnahmen
+ax1 = nexttile;
 hold on
-yline(0,'--k','Ideal')
 
-xticks(1:3)
-xticklabels({'1/60 Hz','3/60 Hz','5/60 Hz'})
-ylim([-180 180])
-ylabel('Phasendifferenz zum Ideal [°]')
-xlabel('Frequenz des 30/30-Musters')
-title('Phasenvergleich der vier Aufnahmen mit dem Ideal')
-legend(dateien,'Interpreter','none','Location','best')
+h = gobjects(4,1);
+
+for m = 1:4
+    h(m) = semilogx(fAlle{m},AAlle{m}, ...
+        'Color',farben(m,:),'LineWidth',1.2);
+
+    plot(fPeak(m,:),APeak(m,:),'o', ...
+        'Color',farben(m,:), ...
+        'MarkerFaceColor',farben(m,:), ...
+        'HandleVisibility','off');
+end
+
+xline(1/60,':','Blockrhythmus','Color',grau);
+xline(4.6,':','4,6 Hz','Color',grau);
+
+xlim([0.008 20])
+ylabel('Relative Amplitude')
+title('Direkte FFT der vier Rohaufnahmen')
+legend(h,dateien,'Interpreter','none', ...
+    'Location','northwest','Box','off')
 grid on
 box off
 
-%% Hauptphase in eine Zeitverschiebung umrechnen
-verzoegerung = -phaseDiff(:,1)/(360*(1/60));
+%% Phasendifferenz zum Ideal
+ax2 = nexttile;
 
-Ergebnis = table(string(dateien(:)),phaseDiff(:,1),verzoegerung, ...
-    'VariableNames',{'Aufnahme','Phase_bei_1_60_Grad', ...
-                     'Zeitverschiebung_s'});
+b = bar(phaseDifferenz','grouped');
+
+for m = 1:4
+    b(m).FaceColor = farben(m,:);
+end
+
+yline(0,':','Ideal','Color',grau);
+ylim([-180 180])
+yticks(-180:90:180)
+
+xticks(1:5)
+xticklabels({'Block','4,6 Hz','9,2 Hz', ...
+              '13,8 Hz','18,4 Hz'})
+
+xlabel('Dominanter FFT-Peak')
+ylabel('Phasendifferenz zum Ideal [°]')
+title('Phasenvergleich mit dem Idealsignal')
+grid on
+box off
+
+%% Gemeinsames Design
+title(tl,'FFT- und Phasenvergleich der vier SEP-Aufnahmen', ...
+    'FontSize',18)
+
+subtitle(tl, ...
+    'Direkte Rohspannungs-FFT | Ideal: 9 × 138 Impulse bei 4,6 Hz')
+
+set([ax1 ax2],'FontName','Arial','FontSize',11, ...
+    'LineWidth',0.8,'GridAlpha',0.12, ...
+    'TickDir','out','Color',[0.985 0.989 0.994]);
+
+%% Ergebnistabelle
+Ergebnis = table(string(dateien(:)), ...
+    phaseDifferenz(:,1),phaseDifferenz(:,2), ...
+    'VariableNames',{'Aufnahme', ...
+    'Phasendifferenz_Block_Grad', ...
+    'Phasendifferenz_4_6Hz_Grad'});
 
 disp(Ergebnis)
+
+%% Speichern
+exportgraphics(fig,'Phasenvergleich_4_Aufnahmen.png', ...
+    'Resolution',300);
+
+savefig(fig,'Phasenvergleich_4_Aufnahmen.fig');
