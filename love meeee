@@ -1,81 +1,63 @@
-clear; close all; clc
+%% PAPER-GRAFIK: NUR DIE WICHTIGE BLOCKFREQUENZ 1/60 Hz
 
-dateien = ["auf1.csv","auf2.csv","auf3.csv","auf4.csv"];
-tInc = 1e-5;                    % Abtastintervall der Rigol-Dateien
-Fs = 4;                         % Abtastrate des Blocksignals
-t = (0:1/Fs:480-1/Fs)';         % 8 vollständige 60-s-Zyklen
-ideal = double(mod(t,60)<30);    % ideales 30/30-Signal
+phi = Phase(1,:)';                 % Phase bei 0,01667 Hz
+mittelAbs = mean(abs(phi));
+medianAbs = median(abs(phi));
+sdAbs = std(abs(phi));
 
-fZiel = [1/60 3/60 5/60 7/60 9/60];
-idx = round(fZiel*length(t)/Fs)+1;
-Yideal = fft(ideal-mean(ideal));
-
-Phase = zeros(length(fZiel),4);
-Signale = zeros(length(t),4);
-
-for m = 1:4
-    M = readmatrix(dateien(m),'NumHeaderLines',1);
-    u = M(:,1);
-    u = u(isfinite(u));
-
-    schwelle = (min(u)+max(u))/2;
-    puls = u < schwelle;                         % negative Stimulationsimpulse
-    start = find(~puls(1:end-1) & puls(2:end))+1;
-    start = start([true; diff(start)*tInc>0.1]);
-    pulszeit = (start-1)*tInc;
-
-    bs = [1; find(diff(pulszeit)>2)+1];
-    be = [bs(2:end)-1; length(pulszeit)];
-    gueltig = (be-bs+1)>=100;
-    bs = bs(gueltig);
-    be = be(gueltig);
-
-    if length(bs)<8
-        error('%s: Weniger als 8 vollständige Blöcke erkannt.',dateien(m))
-    end
-
-    blockstart = pulszeit(bs(1:8));
-    blockstart = blockstart-blockstart(1);        % erster Block = Zeitpunkt 0
-
-    signal = zeros(size(t));
-
-    for b = 1:8
-        p = pulszeit(bs(b):be(b));
-        dauer = p(end)-p(1)+median(diff(p));
-        signal(t>=blockstart(b) & t<blockstart(b)+dauer) = 1;
-    end
-
-    Signale(:,m) = signal;
-    Y = fft(signal-mean(signal));
-
-    Phase(:,m) = rad2deg(angle(exp(1i* ...
-        (angle(Y(idx))-angle(Yideal(idx))))));
+grenze = max(abs(phi))*1.4;
+if grenze < 1
+    grenze = 1;
 end
 
-%% Kontrolle: Starten wirklich alle bei 0?
-figure
-stairs(t,ideal,'k--','LineWidth',2); hold on
-stairs(t,Signale,'LineWidth',1)
-xlim([0 120]); ylim([-0.1 1.1]); grid on
-xlabel('Zeit [s]'); ylabel('Blocksignal')
-legend(["Ideal",dateien],'Location','best')
-title('Kontrolle der gemeinsamen Startzeit')
+farben = lines(4);
 
-%% Phasenvergleich
-figure
-plot(fZiel,Phase,'o','MarkerSize',7,'LineWidth',1.5)
+fig = figure('Color','w','Position',[100 100 850 520]);
 hold on
-yline(0,'k--','Ideal 30/30')
-ylim([-180 180]); grid on
-xlabel('Frequenz [Hz]')
+
+for m = 1:4
+    scatter(m,phi(m),90,farben(m,:),'filled');
+
+    if phi(m) >= 0
+        abstand = 0.08*grenze;
+    else
+        abstand = -0.10*grenze;
+    end
+
+    text(m,phi(m)+abstand,sprintf('%.2f°',phi(m)), ...
+        'HorizontalAlignment','center','FontSize',11);
+end
+
+yline(0,'k--','Ideal 30/30','LineWidth',1.3);
+
+xlim([0.5 4.5])
+ylim([-grenze grenze])
+xticks(1:4)
+xticklabels(erase(dateien,'.csv'))
+
 ylabel('Phasenabweichung zum Ideal [°]')
-title('Phasenvergleich der vier SEP-Aufnahmen')
-legend(dateien,'Location','eastoutside')
+xlabel('SEP-Aufnahme')
+title('Phase bei der Blockfrequenz 1/60 Hz')
+subtitle(sprintf(['Ausrichtung am ersten Blockstart | 8 Zyklen | ' ...
+    'mittlere absolute Abweichung %.2f°'],mittelAbs))
 
-%% Ergebnistabelle
-Ergebnis = table(fZiel',mean(abs(Phase),2),median(abs(Phase),2), ...
-    std(abs(Phase),0,2),'VariableNames', ...
-    {'Frequenz_Hz','Mittelwert_abs_Grad', ...
-    'Median_abs_Grad','Standardabweichung_Grad'});
+grid on
+box off
+set(gca,'FontName','Arial','FontSize',11,'GridAlpha',0.15)
 
-disp(Ergebnis)
+exportgraphics(fig,'Phase_Grundfrequenz.png','Resolution',300);
+
+%% TABELLEN SPEICHERN
+
+Einzelwerte = table(dateien',phi,abs(phi), ...
+    'VariableNames',{'Datei','Phase_Grad','Absolute_Abweichung_Grad'});
+
+Statistik = table(mittelAbs,medianAbs,sdAbs,min(phi),max(phi), ...
+    'VariableNames',{'Mittelwert_abs_Grad','Median_abs_Grad', ...
+    'Standardabweichung_abs_Grad','Minimum_Grad','Maximum_Grad'});
+
+writetable(Einzelwerte,'Phase_Einzelwerte.csv');
+writetable(Statistik,'Phase_Statistik.csv');
+
+disp(Einzelwerte)
+disp(Statistik)
