@@ -1,266 +1,339 @@
 clear; close all; clc
 
-%% Vier Rohaufnahmen auswählen
-[dateien,ordner] = uigetfile('*.csv', ...
-    'Vier Rohaufnahmen auswählen', ...
-    'MultiSelect','on');
-
-if isequal(dateien,0)
-    return
-end
-
-if ischar(dateien)
-    dateien = {dateien};
-end
-
-dateien = dateien(:);
-
-if length(dateien) ~= 4
-    error('Bitte genau vier CSV-Dateien auswählen.')
-end
-
 %% Einstellungen
-fs = 100000;
+fs = 100000;           % Abtastrate des Oszilloskops
+fStim = 4.6;           % Stimulationsfrequenz
+sollStim = 30;         % 30 s Stimulation
+sollPause = 30;        % 30 s Pause
+sollZyklus = 60;       % Gesamter Zyklus
+anzBloecke = 9;
+anzMessungen = 4;
 
-fZiel = [1/60 4.6 9.2 13.8 18.4];
-suchbreite = [0.006 0.5 0.5 0.5 0.5];
+impulsperiode = 1/fStim;       % ungefähr 0,217 s
+idealStart = 0:60:480;         % ideale Starts der 9 Blöcke
 
-blau   = [0.10 0.36 0.63];
-orange = [0.86 0.40 0.15];
-gruen  = [0.16 0.55 0.44];
-lila   = [0.49 0.38 0.65];
-grau   = [0.55 0.58 0.62];
+%% Speicher vorbereiten
+namen = strings(anzMessungen,1);
 
-farben = [blau; orange; gruen; lila];
+impulseProBlock = zeros(anzMessungen,anzBloecke);
+stimDauer = zeros(anzMessungen,anzBloecke);
+pauseDauer = zeros(anzMessungen,anzBloecke-1);
+zyklusDauer = zeros(anzMessungen,anzBloecke-1);
 
-fAlle = cell(4,1);
-AAlle = cell(4,1);
+zeitFehler = zeros(anzMessungen,anzBloecke);
+phaseFehler = zeros(anzMessungen,anzBloecke);
 
-fPeak = zeros(4,5);
-APeak = zeros(4,5);
-phaseMessung = zeros(4,5);
-polaritaet = zeros(4,1);
+%% Vier Rohaufnahmen einlesen
+for m = 1:anzMessungen
 
-%% Direkte FFT aller vier Rohaufnahmen
-for m = 1:4
+    [datei,pfad] = uigetfile('*.csv', ...
+        sprintf('Aufnahme %d von 4 auswählen',m));
 
-    %% Rohdatei laden
-    M = readmatrix(fullfile(ordner,dateien{m}), ...
+    if isequal(datei,0)
+        error('Die Dateiauswahl wurde abgebrochen.')
+    end
+
+    namen(m) = erase(string(datei),'.csv');
+
+    M = readmatrix(fullfile(pfad,datei), ...
         'NumHeaderLines',1);
 
     y = M(:,1);
+    clear M
+
     y = y(isfinite(y));
 
-    %% FFT der Rohspannung
-    N = length(y);
-    Y = fft(y-mean(y));
-
-    % Nur Bereich bis 20 Hz übernehmen
-    k = (2:floor(20*N/fs)+1)';
-    f = (k-1)*fs/N;
-
-    Y20 = Y(k);
-
-    A = 2*abs(Y20)/N;
-    A = A/max(A);
-
-    %% Polarität und ersten Impuls automatisch erkennen
+    %% Automatische Erkennung der Signalrichtung
     basis = median(y);
-
     ausschlagOben = max(y)-basis;
     ausschlagUnten = basis-min(y);
 
     if ausschlagOben >= ausschlagUnten
 
-        polaritaet(m) = 1;
         schwelle = basis + 0.5*ausschlagOben;
-        ersterImpuls = find(y > schwelle,1);
+
+        idx = find( ...
+            y(1:end-1) <= schwelle & ...
+            y(2:end) > schwelle) + 1;
 
     else
 
-        polaritaet(m) = -1;
         schwelle = basis - 0.5*ausschlagUnten;
-        ersterImpuls = find(y < schwelle,1);
+
+        idx = find( ...
+            y(1:end-1) >= schwelle & ...
+            y(2:end) < schwelle) + 1;
 
     end
 
-    if isempty(ersterImpuls)
-        error('%s: Kein Impuls automatisch erkannt.', ...
-            dateien{m})
+    %% Mehrfacherkennungen desselben Impulses entfernen
+    mindestAbstand = round(0.1*fs);
+
+    idx = idx([true; diff(idx) > mindestAbstand]);
+
+    % Zeitpunkte der erkannten Impulse
+    p = (idx-1)/fs;
+
+    %% Stimulationsblöcke erkennen
+    % Mehr als 2 s Abstand bedeutet: neuer Block
+    blockAnfang = [1; find(diff(p)>2)+1];
+
+    blockEnde = [blockAnfang(2:end)-1; length(p)];
+
+    anzahlImpulse = blockEnde-blockAnfang+1;
+
+    % Nur vollständige Blöcke mit plausibler Impulszahl
+    guteBloecke = find( ...
+        anzahlImpulse >= 100 & ...
+        anzahlImpulse <= 180);
+
+    if length(guteBloecke) < anzBloecke
+        error('%s: Nur %d vollständige Blöcke erkannt.', ...
+            datei,length(guteBloecke))
     end
 
-    fprintf('%s: Schwelle %.3f V, Polarität %d\n', ...
-        dateien{m},schwelle,polaritaet(m));
+    guteBloecke = guteBloecke(1:anzBloecke);
 
-    %% Ersten Impuls als gemeinsamen Zeitnullpunkt verwenden
-    t0 = (ersterImpuls-1)/fs;
+    %% Zeiten der neun Blöcke
+    startZeit = p(blockAnfang(guteBloecke));
+    endeZeit = p(blockEnde(guteBloecke));
 
-    % Nur Phasenreferenz verschieben
-    Ybezogen = Y20 .* exp(1i*2*pi*f*t0);
-    phi = rad2deg(angle(Ybezogen));
+    impulseProBlock(m,:) = anzahlImpulse(guteBloecke)';
 
-    %% Blockpeak, 4,6 Hz und Oberwellen suchen
-    for n = 1:length(fZiel)
+    stimDauer(m,:) = (endeZeit-startZeit)';
 
-        bereich = abs(f-fZiel(n)) < suchbreite(n);
-        stellen = find(bereich);
+    pauseDauer(m,:) = ...
+        (startZeit(2:end)-endeZeit(1:end-1))';
 
-        [~,p] = max(A(bereich));
-        punkt = stellen(p);
+    zyklusDauer(m,:) = diff(startZeit)';
 
-        fPeak(m,n) = f(punkt);
-        APeak(m,n) = A(punkt);
-        phaseMessung(m,n) = phi(punkt);
+    %% Vergleich mit idealem 30/30-Ablauf
+    % Erster Block wird auf t = 0 gesetzt
+    startRelativ = (startZeit-startZeit(1))';
 
-    end
+    zeitFehler(m,:) = startRelativ-idealStart;
 
-    fAlle{m} = f;
-    AAlle{m} = A;
+    % Umrechnung des Zeitfehlers in Phase:
+    % 60 s entsprechen 360 Grad
+    phaseFehler(m,:) = ...
+        360*zeitFehler(m,:)/sollZyklus;
 
-    clear M y Y Y20
+    clear y idx p
 end
 
-%% Idealsignal definieren
-% 9 Blöcke, 138 Impulse pro Block, Abstand 1/4,6 s
-pIdeal = [];
+%% Ergebnisse pro Aufnahme
+stimMittel = mean(stimDauer,2);
+stimMedian = median(stimDauer,2);
+stimSD = std(stimDauer,0,2);
 
-for block = 0:8
-    pIdeal = [pIdeal, block*60 + (0:137)/4.6];
-end
+pauseMittel = mean(pauseDauer,2);
+pauseMedian = median(pauseDauer,2);
+pauseSD = std(pauseDauer,0,2);
 
-%% Idealphase an den jeweiligen Peakfrequenzen
-phaseIdeal = zeros(4,5);
+zyklusMittel = mean(zyklusDauer,2);
+zyklusMedian = median(zyklusDauer,2);
+zyklusSD = std(zyklusDauer,0,2);
 
-for m = 1:4
+mittlererZeitFehler = mean(abs(zeitFehler),2);
+mittlererPhaseFehler = mean(abs(phaseFehler),2);
 
-    for n = 1:5
+fehlerBlock9 = zeitFehler(:,end);
+phaseBlock9 = phaseFehler(:,end);
 
-        Xideal = polaritaet(m) * ...
-            sum(exp(-1i*2*pi*fPeak(m,n)*pIdeal));
+% Geschätzte Dauer von neun vollständigen Zyklen
+gesamtDauer = idealStart(end) + zyklusMittel;
+gesamtAbweichung = gesamtDauer-540;
 
-        phaseIdeal(m,n) = rad2deg(angle(Xideal));
+%% Große Ergebnistabelle
+Ergebnisse = table( ...
+    namen, ...
+    mean(impulseProBlock,2), ...
+    stimMittel,stimMedian,stimSD,stimMittel-sollStim, ...
+    pauseMittel,pauseMedian,pauseSD,pauseMittel-sollPause, ...
+    zyklusMittel,zyklusMedian,zyklusSD,zyklusMittel-sollZyklus, ...
+    mittlererZeitFehler,mittlererPhaseFehler, ...
+    fehlerBlock9,phaseBlock9, ...
+    gesamtDauer,gesamtAbweichung, ...
+    'VariableNames',{ ...
+    'Messung', ...
+    'Impulse_Mittelwert', ...
+    'Stim_Mittelwert_s', ...
+    'Stim_Median_s', ...
+    'Stim_SD_s', ...
+    'Stim_Abweichung_zu_30s', ...
+    'Pause_Mittelwert_s', ...
+    'Pause_Median_s', ...
+    'Pause_SD_s', ...
+    'Pause_Abweichung_zu_30s', ...
+    'Zyklus_Mittelwert_s', ...
+    'Zyklus_Median_s', ...
+    'Zyklus_SD_s', ...
+    'Zyklus_Abweichung_zu_60s', ...
+    'Mittlere_abs_Zeitabweichung_s', ...
+    'Mittlere_abs_Phasenabweichung_Grad', ...
+    'Zeitfehler_Block9_s', ...
+    'Phasenfehler_Block9_Grad', ...
+    'Gesamtdauer_geschaetzt_s', ...
+    'Abweichung_zu_540s'});
 
-    end
-end
+disp(Ergebnisse)
 
-%% Phasendifferenz auf -180° bis +180° begrenzen
-phaseDifferenz = rad2deg(angle(exp( ...
-    1i*deg2rad(phaseMessung-phaseIdeal))));
+writetable(Ergebnisse, ...
+    'Phasenvergleich_Einzelergebnisse.csv');
 
-%% Paper-Abbildung
-fig = figure('Color','w', ...
+%% Zusammenfassung aller vier Aufnahmen
+werte = [ ...
+    stimMittel, ...
+    pauseMittel, ...
+    zyklusMittel, ...
+    fehlerBlock9, ...
+    phaseBlock9, ...
+    gesamtAbweichung];
+
+Kennwert = [ ...
+    "Stimulationsdauer"; ...
+    "Pausendauer"; ...
+    "Zyklusdauer"; ...
+    "Zeitfehler an Block 9"; ...
+    "Phasenfehler an Block 9"; ...
+    "Abweichung von 540 s"];
+
+Einheit = ["s";"s";"s";"s";"Grad";"s"];
+
+Zusammenfassung = table( ...
+    Kennwert,Einheit, ...
+    mean(werte,1)', ...
+    median(werte,1)', ...
+    std(werte,0,1)', ...
+    min(werte,[],1)', ...
+    max(werte,[],1)', ...
+    'VariableNames',{ ...
+    'Kennwert','Einheit','Mittelwert','Median', ...
+    'Standardabweichung','Minimum','Maximum'});
+
+disp(Zusammenfassung)
+
+writetable(Zusammenfassung, ...
+    'Phasenvergleich_Zusammenfassung.csv');
+
+%% Toleranz: eine Impulsperiode pro Zyklus
+blockNummer = 1:anzBloecke;
+
+% Worst Case: In jedem Zyklus kommt dieselbe Abweichung hinzu
+toleranzZeit = (blockNummer-1)*impulsperiode;
+
+toleranzPhase = ...
+    360*toleranzZeit/sollZyklus;
+
+%% Farben
+farben = lines(anzMessungen);
+grau = [0.55 0.58 0.62];
+
+%% Abbildung
+fig = figure( ...
+    'Color','w', ...
     'Position',[80 80 1100 720]);
 
 tl = tiledlayout(2,1, ...
     'TileSpacing','compact', ...
     'Padding','compact');
 
-%% Amplitudenspektren
+%% Phasenabweichung
 ax1 = nexttile;
+
+hTol = fill( ...
+    [blockNummer fliplr(blockNummer)], ...
+    [toleranzPhase fliplr(-toleranzPhase)], ...
+    [0.85 0.87 0.90], ...
+    'EdgeColor','none', ...
+    'FaceAlpha',0.45);
+
 hold on
 
-h = gobjects(4,1);
+hIdeal = yline(0,'--', ...
+    'Ideal 30/30', ...
+    'Color',grau, ...
+    'LineWidth',1.3);
 
-for m = 1:4
+hMessung = gobjects(anzMessungen,1);
 
-    h(m) = semilogx(fAlle{m},AAlle{m}, ...
-        'Color',farben(m,:), ...
-        'LineWidth',1.2);
+for m = 1:anzMessungen
 
-    plot(fPeak(m,:),APeak(m,:),'o', ...
+    hMessung(m) = plot( ...
+        blockNummer,phaseFehler(m,:), ...
+        '-o', ...
         'Color',farben(m,:), ...
         'MarkerFaceColor',farben(m,:), ...
-        'MarkerSize',6, ...
-        'HandleVisibility','off');
+        'LineWidth',1.6, ...
+        'MarkerSize',6);
 
 end
 
-xline(1/60,':','Blockrhythmus', ...
-    'Color',grau);
-
-xline(4.6,':','4,6 Hz', ...
-    'Color',grau);
-
-xlim([0.008 20])
-ylabel('Relative Amplitude')
-title('Direkte FFT der vier Rohaufnahmen')
-
-legend(h,dateien, ...
-    'Interpreter','none', ...
-    'Location','northwest', ...
-    'Box','off')
-
+ylabel('Phasenabweichung [°]')
+title('Abweichung vom idealen 60-s-Blockrhythmus')
+xticks(1:9)
 grid on
 box off
 
-%% Phasendifferenz zum Ideal
+legende = [cellstr(namen); ...
+    {'Ideal 30/30'}; ...
+    {'Toleranz: ±1 Impulsperiode je Zyklus'}];
+
+legend([hMessung;hIdeal;hTol],legende, ...
+    'Location','bestoutside');
+
+%% Zeitabweichung
 ax2 = nexttile;
 
-b = bar(phaseDifferenz','grouped');
+fill( ...
+    [blockNummer fliplr(blockNummer)], ...
+    [toleranzZeit fliplr(-toleranzZeit)], ...
+    [0.85 0.87 0.90], ...
+    'EdgeColor','none', ...
+    'FaceAlpha',0.45);
 
-for m = 1:4
-    b(m).FaceColor = farben(m,:);
+hold on
+yline(0,'--','Color',grau,'LineWidth',1.3);
+
+for m = 1:anzMessungen
+
+    plot( ...
+        blockNummer,zeitFehler(m,:), ...
+        '-o', ...
+        'Color',farben(m,:), ...
+        'MarkerFaceColor',farben(m,:), ...
+        'LineWidth',1.6, ...
+        'MarkerSize',6);
+
 end
 
-yline(0,':','Ideal', ...
-    'Color',grau);
-
-ylim([-180 180])
-yticks(-180:90:180)
-
-xticks(1:5)
-xticklabels({'Block','4,6 Hz','9,2 Hz', ...
-    '13,8 Hz','18,4 Hz'})
-
-xlabel('Dominanter FFT-Peak')
-ylabel('Phasendifferenz zum Ideal [°]')
-title('Phasenvergleich mit dem Idealsignal')
-
-legend(dateien, ...
-    'Interpreter','none', ...
-    'Location','best', ...
-    'Box','off')
-
+xlabel('Stimulationsblock')
+ylabel('Zeitabweichung [s]')
+title('Zeitfehler gegenüber dem idealen 30/30-Ablauf')
+xticks(1:9)
 grid on
 box off
 
-%% Design
+%% Gemeinsames Design
 title(tl, ...
-    'FFT- und Phasenvergleich der vier SEP-Aufnahmen', ...
+    'Phasen- und Zeitvergleich von vier SEP-Aufnahmen', ...
     'FontSize',18)
 
 subtitle(tl, ...
-    ['Direkte Rohspannungs-FFT | Ideal: ', ...
-     '9 × 138 Impulse bei 4,6 Hz'])
+    'Ideal: 30 s Stimulation, 30 s Pause und 9 Wiederholungen')
 
 set([ax1 ax2], ...
     'FontName','Arial', ...
     'FontSize',11, ...
     'LineWidth',0.8, ...
-    'GridAlpha',0.12, ...
+    'GridAlpha',0.15, ...
     'TickDir','out', ...
     'Color',[0.985 0.989 0.994]);
 
-%% Ergebnistabelle
-Ergebnis = table( ...
-    string(dateien), ...
-    fPeak(:,1), ...
-    fPeak(:,2), ...
-    phaseDifferenz(:,1), ...
-    phaseDifferenz(:,2), ...
-    'VariableNames',{ ...
-    'Aufnahme', ...
-    'Blockpeak_Hz', ...
-    'Impulspeak_Hz', ...
-    'Phasendifferenz_Block_Grad', ...
-    'Phasendifferenz_4_6Hz_Grad'});
-
-disp(Ergebnis)
-
-%% Paper-Bild speichern
+%% Für das Paper speichern
 exportgraphics(fig, ...
-    'Phasenvergleich_4_Rohaufnahmen.png', ...
+    'Phasenvergleich_4_Aufnahmen.png', ...
     'Resolution',300);
 
 savefig(fig, ...
-    'Phasenvergleich_4_Rohaufnahmen.fig');
+    'Phasenvergleich_4_Aufnahmen.fig');
