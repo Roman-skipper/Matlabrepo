@@ -2,7 +2,7 @@ clear; close all; clc
 
 files = {'auf1.csv','auf2.csv','auf3.csv','auf4.csv'};
 fs = 100000;
-f = [1 3 5 7 9]/60;
+f = [1 3 5 7 9]/60;                 % Blockfrequenz und Oberwellen
 
 for i = 1:4
     M = readmatrix(files{i},'NumHeaderLines',1);
@@ -18,61 +18,51 @@ for i = 1:4
     Y = fft(y-mean(y)); I = fft(ideal-mean(ideal));
     k = round(f*N/fs)+1;
 
-    phaseRoh(i,:) = rad2deg(angle(Y(k)));
-    phaseIdeal(i,:) = rad2deg(angle(I(k)));
+    % Phase der Rohdaten relativ zur idealen 30/30-Phase
     abw(i,:) = rad2deg(angle(exp(1i*(angle(Y(k))-angle(I(k))))));
 end
 
-idealPhase = rad2deg(angle(mean(exp(1i*deg2rad(phaseIdeal)),1)));
-toleranz = 360*f/4.6;
-absAbw = abs(abw);
+A = abs(abw);
+toleranz = 360*f/4.6;                % eine Impulsperiode
 
 T = table(f',abw(1,:)',abw(2,:)',abw(3,:)',abw(4,:)', ...
-    mean(absAbw,1)',median(absAbw,1)',std(absAbw,0,1)', ...
-    min(absAbw,[],1)',max(absAbw,[],1)', ...
-    mean(absAbw,1)'./(360*f'),toleranz', ...
+    mean(A,1)',median(A,1)',std(A,0,1)',min(A,[],1)',max(A,[],1)', ...
+    mean(A,1)'./(360*f'),toleranz',sum(A>toleranz,1)', ...
     'VariableNames',{'Frequenz_Hz','Aufnahme1_Grad','Aufnahme2_Grad', ...
     'Aufnahme3_Grad','Aufnahme4_Grad','Mittelwert_abs_Grad', ...
     'Median_abs_Grad','Standardabweichung_Grad','Minimum_Grad', ...
-    'Maximum_Grad','Mittlerer_Zeitversatz_s','Toleranz_Grad'});
+    'Maximum_Grad','Mittlerer_Zeitversatz_s','Toleranz_Grad', ...
+    'Anzahl_ausserhalb_Toleranz'});
 
 disp(T)
-writetable(T,'Phasenauswertung_4_Aufnahmen.csv');
+writetable(T,'Phasenauswertung.csv');
 
-%% Paper-Abbildung
+%% Paper-Diagramm
 farben = [0.10 0.36 0.63; 0.86 0.40 0.15; ...
           0.20 0.55 0.35; 0.48 0.30 0.65];
 
-fig = figure('Color','w','Position',[80 80 1050 720]);
-tl = tiledlayout(2,1,'TileSpacing','compact','Padding','compact');
-
-ax1 = nexttile;
-hIdeal = scatter(f,idealPhase,80,'kd','filled'); hold on
+figure('Color','w','Position',[100 100 1000 560]); hold on
 h = gobjects(4,1);
+
 for i = 1:4
-    h(i) = scatter(f,phaseRoh(i,:),55,farben(i,:),'filled');
+    h(i) = scatter(f,abw(i,:),65,farben(i,:),'filled');
 end
-yline(0,':','Color',[0.55 0.58 0.62]);
-ylim([-180 180]); ylabel('Phase [°]'); grid on
-title('FFT-Phase der Rohaufnahmen und des idealen 30/30-Signals')
-legend([hIdeal;h],["Ideal 30/30",string(files)], ...
+
+h0 = yline(0,'--','Ideal 30/30','Color',[0.25 0.25 0.25], ...
+    'LineWidth',1.4);
+
+xlabel('Frequenz [Hz]')
+ylabel('Phasenabweichung zum Ideal [°]')
+title('Phasenvergleich der vier SEP-Rohaufnahmen')
+subtitle('Ideal 30/30 = 0° | Messpunkte nicht verbunden')
+xticks(f); xticklabels(compose('%.4f',f))
+ylim([-180 180]); yticks(-180:45:180)
+grid on; box off
+
+legend([h;h0],[string(files)';"Ideal 30/30"], ...
     'Location','eastoutside');
 
-ax2 = nexttile;
-fill([f fliplr(f)],[toleranz fliplr(-toleranz)], ...
-    [0.85 0.87 0.90],'EdgeColor','none','FaceAlpha',0.6);
-hold on
-for i = 1:4
-    scatter(f,abw(i,:),55,farben(i,:),'filled');
-end
-yline(0,'--','Ideal','Color',[0.55 0.58 0.62]);
-xlabel('Frequenz [Hz]'); ylabel('Abweichung [°]'); grid on
-title('Phasenabweichung gegenüber dem idealen 30/30-Signal')
-
-set([ax1 ax2],'FontName','Arial','FontSize',11,'LineWidth',0.8, ...
+set(gca,'FontName','Arial','FontSize',11,'LineWidth',0.8, ...
     'GridAlpha',0.14,'TickDir','out','Color',[0.985 0.989 0.994]);
-xticks(ax1,f); xticks(ax2,f)
-title(tl,'Phasenvergleich von vier SEP-Rohaufnahmen','FontSize',17)
-subtitle(tl,'Messpunkte ohne Verbindungslinien | Grau: Toleranz einer Impulsperiode')
 
-exportgraphics(fig,'Phasenvergleich_Paper.png','Resolution',300);
+exportgraphics(gcf,'Phasenvergleich_Paper.png','Resolution',300);
