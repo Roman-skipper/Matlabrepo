@@ -1,23 +1,29 @@
 clear; close all; clc
 
-dateien = {'auf1.csv','auf2.csv','auf3.csv','auf4.csv'};
+[dateien,ordner] = uigetfile('*.csv', ...
+    'auf1 bis auf4 auswählen','MultiSelect','on');
+
+if isequal(dateien,0), error('Keine Dateien gewählt.'); end
+if ischar(dateien), dateien = {dateien}; end
+
 fs = 100000;
 fZiel = [1/60 3/60 5/60 7/60 9/60];
-phi = NaN(4,length(fZiel));
-
-% Ideales 30/30-Signal für exakt 8 Zyklen
-N = 480*fs;
+N = 480*fs;                         % 8 Blöcke plus letzte Pause
 t = (0:N-1)'/fs;
+
 ideal = double(mod(t,60)<30);
 Yideal = fft(ideal-mean(ideal));
+phi = NaN(length(dateien),length(fZiel));
 
-for j = 1:4
+for j = 1:length(dateien)
 
-    M = readmatrix(dateien{j},'NumHeaderLines',1);
+    M = readmatrix(fullfile(ordner,dateien{j}), ...
+        'NumHeaderLines',1);
+
     u = M(:,1);
     u = u(isfinite(u));
 
-    % Ersten vollständigen Block erkennen
+    % Ersten vollständigen Block finden
     high = u > 5;
     imp = find(~high(1:end-1) & high(2:end)) + 1;
     imp = imp([true; diff(imp)/fs > 0.1]);
@@ -27,8 +33,14 @@ for j = 1:4
     e = [a(2:end)-1; length(p)];
     a = a(e-a+1 >= 100);
 
-    % Aufnahme am ersten Blockstart beginnen lassen
+    if isempty(a)
+        error('In %s wurde kein vollständiger Block gefunden.',dateien{j});
+    end
+
+    % Regel 1: Aufnahme beginnt beim ersten Blockstart
     start = imp(a(1));
+
+    % Regel 2: nur 8 Blöcke einschließlich letzter Pause
     ende = start + N - 1;
 
     if ende > length(u)
@@ -36,29 +48,26 @@ for j = 1:4
             dateien{j});
     end
 
-    % Nur Block 1 bis Block 8 einschließlich letzter Pause
     u = u(start:ende);
 
-    % FFT
     Y = fft(u-mean(u));
-    f = (0:N-1)*fs/N;
 
-    % Phase relativ zum idealen 30/30-Signal
     for k = 1:length(fZiel)
-        [~,idx] = min(abs(f-fZiel(k)));
+
+        idx = round(fZiel(k)*N/fs) + 1;
 
         phi(j,k) = rad2deg(angle(exp(1i*( ...
             angle(Y(idx))-angle(Yideal(idx))))));
     end
 end
 
-% Phasendiagramm
 figure('Color','w');
 hold on
 
-farben = lines(4);
+farben = lines(length(dateien));
 
-for j = 1:4
+for j = 1:length(dateien)
+
     plot(fZiel,phi(j,:),'o', ...
         'LineStyle','none', ...
         'MarkerFaceColor',farben(j,:), ...
@@ -77,10 +86,9 @@ xlabel('Frequenz [Hz]');
 ylabel('Phasenabweichung zum Ideal [°]');
 title('Phasenvergleich der vier SEP-Aufnahmen');
 
-legend('auf1.csv','auf2.csv','auf3.csv','auf4.csv', ...
-    'Ideal 30/30','Location','eastoutside');
+legend([dateien {'Ideal 30/30'}], ...
+    'Location','eastoutside');
 
-% Ergebnistabelle
 Ergebnis = table( ...
     fZiel', ...
     mean(abs(phi),1)', ...
