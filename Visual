@@ -1,58 +1,59 @@
 clear; close all; clc
 
-%% Einstellungen
-t = 0:0.05:540;        % gesamte Messzeit: 9 Minuten
-starts = 30:60:510;    % erster Block nach 30 s Ruhe
+%% Zeit und Blockstarts
+t = 0:0.05:540;
+starts = 30:60:510;       % 30 s Ruhe am Anfang
+ablauf = zeros(size(t));
 
-stimSoll = 30;          % ideale Stimulation
-stimMessung = 29.842;   % verkürzte Stimulation
-
-soll = zeros(size(t));
-messung = zeros(size(t));
-
-%% Neun Stimulationsblöcke erzeugen
+%% Neun Blöcke: jeweils 30 s Stimulation
 for i = 1:length(starts)
-    soll(t >= starts(i) & t < starts(i)+stimSoll) = 1;
-    messung(t >= starts(i) & t < starts(i)+stimMessung) = 1;
+    ablauf(t >= starts(i) & t < starts(i)+30) = 1;
 end
 
-%% Gesamte neun Minuten
-figure('Color','w');
+figure('Color','w','Position',[100 100 1000 650]);
 
+%% 1. Gesamter Ablauf über neun Minuten
 subplot(2,1,1)
-stairs(t,soll+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
-hold on
-stairs(t,messung,'LineWidth',2,'Color',[0.86 0.40 0.15]);
+
+stairs(t,ablauf,'LineWidth',2,'Color',[0.10 0.36 0.63]);
 
 xlim([0 540])
-ylim([-0.2 2.8])
-yticks([0.5 2])
-yticklabels({'Messung','Ideal'})
+ylim([-0.2 1.2])
+yticks([0 1])
+yticklabels({'Ruhe','Stimulation'})
 xticks(0:60:540)
 xticklabels(0:9)
+
 xlabel('Zeit [min]')
-title('Neun Minuten mit 30 s Ruhe zu Beginn')
+title('Schematischer Ablauf über neun Minuten')
 grid on
-legend('Ideal: 30,000 s','Messung: 29,842 s', ...
-       'Location','southoutside','Orientation','horizontal')
 
-%% Vergrößerung des ersten Übergangs
+%% 2. Deutlicher Vergleich eines Zyklus
 subplot(2,1,2)
-stairs(t,soll+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
+
+t2 = 0:0.05:60;
+
+ideal = double(t2 < 30);       % 30 s Stimulation
+simulation = double(t2 < 28);  % nur 28 s Stimulation
+
+stairs(t2,ideal+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
 hold on
-stairs(t,messung,'LineWidth',2,'Color',[0.86 0.40 0.15]);
+stairs(t2,simulation,'LineWidth',2,'Color',[0.86 0.40 0.15]);
 
-xline(59.842,':','Messung endet','Color',[0.86 0.40 0.15]);
-xline(60,'--','Ideal endet','Color',[0.10 0.36 0.63]);
-xline(90,'--','Gemeinsamer nächster Start');
+xline(28,':','Simulation endet');
+xline(30,'--','Ideal endet');
 
-xlim([55 95])
+xlim([0 60])
 ylim([-0.2 2.8])
 yticks([0.5 2])
-yticklabels({'Messung','Ideal'})
-xlabel('Zeit [s]')
-title('Früheres Ende der Stimulation und längere Pause')
+yticklabels({'Simulation','Ideal'})
+
+xlabel('Zeit innerhalb des Zyklus [s]')
+title('Schematischer Vergleich: früheres Ende und längere Pause')
+legend('Ideal: 30 s Stimulation + 30 s Pause', ...
+       'Simulation: 28 s Stimulation + 32 s Pause', ...
+       'Location','southoutside')
 grid on
 
-%% Bild speichern
-exportgraphics(gcf,'SEP_Blockvergleich.png','Resolution',300);
+%% Als Bild speichern
+exportgraphics(gcf,'SEP_Blockablauf_schematisch.png','Resolution',300);
