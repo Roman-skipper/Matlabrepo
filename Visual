@@ -1,6 +1,6 @@
 clear; close all; clc
 
-%% Gesamter Ablauf über neun Minuten
+%% 9-Minuten-Ablauf
 t = 0:0.05:540;
 starts = 30:60:510;
 ablauf = zeros(size(t));
@@ -24,11 +24,11 @@ xlabel('Zeit [min]')
 title('Schematischer Ablauf über neun Minuten')
 grid on
 
-%% Vergleich über zwei Zyklen
-t2 = 0:0.05:120-0.05;
+%% Vergleich: früheres Ende und fast gleicher nächster Start
+t2 = 0:0.05:90;
 
-ideal = double(mod(t2,60) < 30);
-simulation = double(mod(t2,60) < 28);
+ideal = (t2 < 30) | (t2 >= 60);
+simulation = (t2 < 28) | (t2 >= 60.2);
 
 subplot(2,1,2)
 
@@ -38,19 +38,16 @@ stairs(t2,simulation,'LineWidth',2,'Color',[0.86 0.40 0.15]);
 
 xline(28,':','Simulation endet');
 xline(30,'--','Ideal endet');
-xline(60,'k--','Gemeinsamer nächster Start');
+xline(60,'--','Ideal startet');
+xline(60.2,':','Simulation startet');
 
-xlim([0 70])
+xlim([20 70])
 ylim([-0.2 2.8])
 yticks([0.5 2])
 yticklabels({'Simulation','Ideal'})
-xticks([0 28 30 60 70])
-
 xlabel('Zeit [s]')
-title('Gleicher Blockstart trotz früherem Stimulationsende')
-legend('Ideal: 30 s Stimulation', ...
-       'Simulation: 28 s Stimulation', ...
-       'Location','southoutside')
+title('Längere Pause und fast zeitgleicher nächster Start')
+legend('Ideal','Simulation','Location','southoutside')
 grid on
 
 exportgraphics(gcf,'SEP_Blockablauf_schematisch.png','Resolution',300);
