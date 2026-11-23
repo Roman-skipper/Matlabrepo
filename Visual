@@ -1,143 +1,58 @@
 clear; close all; clc
 
 %% Einstellungen
-stimSoll = 30;
-stimMessung = 29.842;
+t = 0:0.05:540;        % gesamte Messzeit: 9 Minuten
+starts = 30:60:510;    % erster Block nach 30 s Ruhe
 
-zyklus = 60;
-pauseSoll = 30;
-pauseMessung = zyklus - stimMessung;   % 30.158 s
+stimSoll = 30;          % ideale Stimulation
+stimMessung = 29.842;   % verkürzte Stimulation
 
-stimStarts = 30:60:510;                % 30 s Ruhe am Anfang
-blau = [0.15 0.45 0.75];
-orange = [0.90 0.55 0.15];
-grau = [0.85 0.87 0.90];
+soll = zeros(size(t));
+messung = zeros(size(t));
 
-%% BILD 1: Vollständige neun Minuten
-fig1 = figure('Color','w','Position',[100 100 1100 420]);
-hold on
-
-% Hintergrund = Ruhe
-rectangle('Position',[0 1.15 540 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
-rectangle('Position',[0 0.25 540 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
-
-% Neun Stimulationsblöcke
-for b = 1:length(stimStarts)
-    s = stimStarts(b);
-
-    rectangle('Position',[s 1.15 stimSoll 0.55], ...
-        'FaceColor',blau,'EdgeColor','none');
-
-    rectangle('Position',[s 0.25 stimMessung 0.55], ...
-        'FaceColor',orange,'EdgeColor','none');
-
-    xline(s,':','Color',[0.5 0.5 0.5]);
+%% Neun Stimulationsblöcke erzeugen
+for i = 1:length(starts)
+    soll(t >= starts(i) & t < starts(i)+stimSoll) = 1;
+    messung(t >= starts(i) & t < starts(i)+stimMessung) = 1;
 end
 
+%% Gesamte neun Minuten
+figure('Color','w');
+
+subplot(2,1,1)
+stairs(t,soll+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
+hold on
+stairs(t,messung,'LineWidth',2,'Color',[0.86 0.40 0.15]);
+
 xlim([0 540])
-ylim([0 2])
-yticks([0.525 1.425])
-yticklabels({'Messung','Soll'})
+ylim([-0.2 2.8])
+yticks([0.5 2])
+yticklabels({'Messung','Ideal'})
 xticks(0:60:540)
 xticklabels(0:9)
-
 xlabel('Zeit [min]')
-title('Schematischer Ablauf über neun Minuten')
-subtitle('30 s Ruhe zu Beginn | alle Stimulationsblöcke starten gleichzeitig')
+title('Neun Minuten mit 30 s Ruhe zu Beginn')
 grid on
-box off
-
-% Legende
-plot(nan,nan,'s','MarkerFaceColor',blau, ...
-    'MarkerEdgeColor','none','MarkerSize',10)
-plot(nan,nan,'s','MarkerFaceColor',orange, ...
-    'MarkerEdgeColor','none','MarkerSize',10)
-plot(nan,nan,'s','MarkerFaceColor',grau, ...
-    'MarkerEdgeColor','none','MarkerSize',10)
-
-legend('Soll-Stimulation 30,000 s', ...
-       'verkürzte Stimulation 29,842 s', ...
-       'Ruhe beziehungsweise Pause', ...
+legend('Ideal: 30,000 s','Messung: 29,842 s', ...
        'Location','southoutside','Orientation','horizontal')
 
-set(gca,'FontName','Arial','FontSize',11,'GridAlpha',0.12)
-
-exportgraphics(fig1,'SEP_Blockvergleich_9min.png','Resolution',300);
-
-
-%% BILD 2: Ein einzelner Zyklus mit Vergrößerung
-fig2 = figure('Color','w','Position',[100 100 950 620]);
-tl = tiledlayout(2,1,'TileSpacing','compact','Padding','compact');
-
-%% Gesamter Zyklus
-nexttile
+%% Vergrößerung des ersten Übergangs
+subplot(2,1,2)
+stairs(t,soll+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
 hold on
+stairs(t,messung,'LineWidth',2,'Color',[0.86 0.40 0.15]);
 
-% Soll
-rectangle('Position',[0 1.15 stimSoll 0.55], ...
-    'FaceColor',blau,'EdgeColor','none');
-rectangle('Position',[stimSoll 1.15 pauseSoll 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
+xline(59.842,':','Messung endet','Color',[0.86 0.40 0.15]);
+xline(60,'--','Ideal endet','Color',[0.10 0.36 0.63]);
+xline(90,'--','Gemeinsamer nächster Start');
 
-% Messung
-rectangle('Position',[0 0.25 stimMessung 0.55], ...
-    'FaceColor',orange,'EdgeColor','none');
-rectangle('Position',[stimMessung 0.25 pauseMessung 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
-
-xline(30,'k--','Soll-Ende 30,000 s');
-xline(60,'k:','Nächster gemeinsamer Start');
-
-xlim([0 60])
-ylim([0 2])
-yticks([0.525 1.425])
-yticklabels({'Messung','Soll'})
-xlabel('Zeit seit Stimulationsstart [s]')
-title('Ein vollständiger 60-s-Zyklus')
-grid on
-box off
-
-text(14.9,0.53,'Stimulation 29,842 s', ...
-    'HorizontalAlignment','center')
-text(44.9,0.53,'Pause 30,158 s', ...
-    'HorizontalAlignment','center')
-
-%% Vergrößerung des Übergangs
-nexttile
-hold on
-
-rectangle('Position',[29.6 1.15 0.4 0.55], ...
-    'FaceColor',blau,'EdgeColor','none');
-rectangle('Position',[30 1.15 0.2 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
-
-rectangle('Position',[29.6 0.25 stimMessung-29.6 0.55], ...
-    'FaceColor',orange,'EdgeColor','none');
-rectangle('Position',[stimMessung 0.25 30.2-stimMessung 0.55], ...
-    'FaceColor',grau,'EdgeColor','none');
-
-xline(stimMessung,'Color',orange,'LineWidth',2);
-xline(30,'k--','Soll-Ende');
-
-text(stimMessung,0.12,'29,842 s', ...
-    'HorizontalAlignment','center','Color',orange)
-text(30,1.85,'30,000 s', ...
-    'HorizontalAlignment','center')
-
-xlim([29.6 30.2])
-ylim([0 2])
-yticks([0.525 1.425])
-yticklabels({'Messung','Soll'})
+xlim([55 95])
+ylim([-0.2 2.8])
+yticks([0.5 2])
+yticklabels({'Messung','Ideal'})
 xlabel('Zeit [s]')
-title('Vergrößerung: Stimulation endet 0,158 s früher')
+title('Früheres Ende der Stimulation und längere Pause')
 grid on
-box off
 
-title(tl,'Früheres Stimulationsende und verlängerte Pause')
-
-set(findall(fig2,'Type','axes'), ...
-    'FontName','Arial','FontSize',11,'GridAlpha',0.12)
-
-exportgraphics(fig2,'SEP_Blockvergleich_Detail.png','Resolution',300);
+%% Bild speichern
+exportgraphics(gcf,'SEP_Blockvergleich.png','Resolution',300);
