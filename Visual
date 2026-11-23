@@ -1,20 +1,17 @@
 clear; close all; clc
 
-%% Zeit und Blockstarts
+%% Gesamter Ablauf über neun Minuten
 t = 0:0.05:540;
-starts = 30:60:510;       % 30 s Ruhe am Anfang
+starts = 30:60:510;
 ablauf = zeros(size(t));
 
-%% Neun Blöcke: jeweils 30 s Stimulation
 for i = 1:length(starts)
     ablauf(t >= starts(i) & t < starts(i)+30) = 1;
 end
 
 figure('Color','w','Position',[100 100 1000 650]);
 
-%% 1. Gesamter Ablauf über neun Minuten
 subplot(2,1,1)
-
 stairs(t,ablauf,'LineWidth',2,'Color',[0.10 0.36 0.63]);
 
 xlim([0 540])
@@ -23,18 +20,17 @@ yticks([0 1])
 yticklabels({'Ruhe','Stimulation'})
 xticks(0:60:540)
 xticklabels(0:9)
-
 xlabel('Zeit [min]')
 title('Schematischer Ablauf über neun Minuten')
 grid on
 
-%% 2. Deutlicher Vergleich eines Zyklus
+%% Vergleich über zwei Zyklen
+t2 = 0:0.05:120-0.05;
+
+ideal = double(mod(t2,60) < 30);
+simulation = double(mod(t2,60) < 28);
+
 subplot(2,1,2)
-
-t2 = 0:0.05:60;
-
-ideal = double(t2 < 30);       % 30 s Stimulation
-simulation = double(t2 < 28);  % nur 28 s Stimulation
 
 stairs(t2,ideal+1.5,'LineWidth',2,'Color',[0.10 0.36 0.63]);
 hold on
@@ -42,18 +38,19 @@ stairs(t2,simulation,'LineWidth',2,'Color',[0.86 0.40 0.15]);
 
 xline(28,':','Simulation endet');
 xline(30,'--','Ideal endet');
+xline(60,'k--','Gemeinsamer nächster Start');
 
-xlim([0 60])
+xlim([0 70])
 ylim([-0.2 2.8])
 yticks([0.5 2])
 yticklabels({'Simulation','Ideal'})
+xticks([0 28 30 60 70])
 
-xlabel('Zeit innerhalb des Zyklus [s]')
-title('Schematischer Vergleich: früheres Ende und längere Pause')
-legend('Ideal: 30 s Stimulation + 30 s Pause', ...
-       'Simulation: 28 s Stimulation + 32 s Pause', ...
+xlabel('Zeit [s]')
+title('Gleicher Blockstart trotz früherem Stimulationsende')
+legend('Ideal: 30 s Stimulation', ...
+       'Simulation: 28 s Stimulation', ...
        'Location','southoutside')
 grid on
 
-%% Als Bild speichern
 exportgraphics(gcf,'SEP_Blockablauf_schematisch.png','Resolution',300);
